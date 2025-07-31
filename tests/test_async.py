@@ -17,7 +17,7 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.types import TASKS
 from langgraph.checkpoint.singlestore.aio import AsyncSingleStoreSaver
-from tests.conftest import DEFAULT_SINGLESTORE_URI
+from tests.conftest import DEFAULT_URI_WITHOUT_DB
 
 
 def _exclude_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -29,12 +29,12 @@ async def _base_saver():
 	"""Fixture for regular connection mode testing."""
 	database = f"test_{uuid4().hex[:16]}"
 	# create unique db
-	with singlestoredb.connect(DEFAULT_SINGLESTORE_URI, autocommit=True, results_type="dict") as conn:
+	with singlestoredb.connect(DEFAULT_URI_WITHOUT_DB, autocommit=True, results_type="dict") as conn:
 		with conn.cursor() as cursor:
 			cursor.execute(f"CREATE DATABASE {database}")
 	try:
 		with singlestoredb.connect(
-			f"{DEFAULT_SINGLESTORE_URI}/{database}",
+			f"{DEFAULT_URI_WITHOUT_DB}/{database}",
 			autocommit=True,
 			results_type="dict",
 		) as conn:
@@ -43,7 +43,7 @@ async def _base_saver():
 			yield checkpointer
 	finally:
 		# drop unique db
-		with singlestoredb.connect(DEFAULT_SINGLESTORE_URI, autocommit=True, results_type="dict") as conn:
+		with singlestoredb.connect(DEFAULT_URI_WITHOUT_DB, autocommit=True, results_type="dict") as conn:
 			with conn.cursor() as cursor:
 				cursor.execute(f"DROP DATABASE {database}")
 
@@ -314,12 +314,12 @@ async def test_from_conn_string() -> None:
 	database = f"test_{uuid4().hex[:16]}"
 
 	# Create the database first
-	with singlestoredb.connect(DEFAULT_SINGLESTORE_URI, autocommit=True, results_type="dict") as conn:
+	with singlestoredb.connect(DEFAULT_URI_WITHOUT_DB, autocommit=True, results_type="dict") as conn:
 		with conn.cursor() as cursor:
 			cursor.execute(f"CREATE DATABASE {database}")
 
 	try:
-		conn_string = f"{DEFAULT_SINGLESTORE_URI}/{database}"
+		conn_string = f"{DEFAULT_URI_WITHOUT_DB}/{database}"
 		async with AsyncSingleStoreSaver.from_conn_string(conn_string) as saver:
 			await saver.setup()
 
@@ -339,7 +339,7 @@ async def test_from_conn_string() -> None:
 			assert retrieved.metadata["test"] == "data"
 	finally:
 		# Clean up
-		with singlestoredb.connect(DEFAULT_SINGLESTORE_URI, autocommit=True, results_type="dict") as conn:
+		with singlestoredb.connect(DEFAULT_URI_WITHOUT_DB, autocommit=True, results_type="dict") as conn:
 			with conn.cursor() as cursor:
 				cursor.execute(f"DROP DATABASE {database}")
 

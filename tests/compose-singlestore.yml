@@ -6,15 +6,15 @@ services:
       - "18091:8080"  # Web UI port
       - "19191:9000"  # Management port
     environment:
-      ROOT_PASSWORD: test_password_123
+      ROOT_PASSWORD: test
     volumes:
       - singlestore_data:/var/lib/singlestore
     healthcheck:
-      test: ["CMD", "singlestore", "-u", "root", "-ptest_password_123", "-e", "SELECT 1"]
-      start_period: 60s
-      timeout: 10s
-      retries: 15
-      interval: 5s
+      test: ["CMD", "singlestore", "-u", "root", "-ptest", "-e", "SELECT 1"]
+      start_period: 20s
+      timeout: 5s
+      retries: 8
+      interval: 3s
     deploy:
       resources:
         limits:
