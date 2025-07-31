@@ -1,0 +1,26 @@
+services:
+  singlestore-test:
+    image: ghcr.io/singlestore-labs/singlestoredb-dev:latest
+    ports:
+      - "33071:3306"  # MySQL port
+      - "18091:8080"  # Web UI port
+      - "19191:9000"  # Management port
+    environment:
+      ROOT_PASSWORD: test_password_123
+    volumes:
+      - singlestore_data:/var/lib/singlestore
+    healthcheck:
+      test: ["CMD", "singlestore", "-u", "root", "-ptest_password_123", "-e", "SELECT 1"]
+      start_period: 60s
+      timeout: 10s
+      retries: 15
+      interval: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+volumes:
+  singlestore_data:
