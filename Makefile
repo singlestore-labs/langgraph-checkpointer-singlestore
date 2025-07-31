@@ -29,11 +29,14 @@ tests:
 uninstall:
 	uv pip uninstall .
 
-clean:
+clean: ## Clean up generated files and environment
 	uv pip uninstall .
 	uv clean
 	rm -rf .venv .ruff_cache .pytest_cache
 	rm -rf **/*/*.egg-info **/*/__pycache__
+	rm -rf .coverage htmlcov/ .pytest_cache/ .mypy_cache/ __pycache__/ .ruff_cache/
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
 
 release:
 	uv run scripts/release.py
@@ -57,11 +60,6 @@ teardown-db: ## Stop SingleStore database
 	docker compose -f tests/compose-singlestore.yml down -v
 
 reset-db: teardown-db setup-db ## Reset SingleStore database (stop and start fresh)
-
-clean: ## Clean up generated files
-	rm -rf .coverage htmlcov/ .pytest_cache/ .mypy_cache/ __pycache__/ .ruff_cache/
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
 
 test-connection: ## Test connection from host using custom port
 	mysql -h localhost -P 33071 -u root -ptest_password_123 -e "SHOW DATABASES;" 2>/dev/null || echo "❌ Cannot connect from host - ensure SingleStore is running"
