@@ -1,0 +1,39 @@
+name: PR Title Check
+
+on:
+  pull_request:
+    types:
+      - auto_merge_enabled
+      - closed
+      - edited
+      - opened
+      - synchronize
+
+env:
+  HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  pull-request-title:
+    name: PR Title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    container:
+      image: gcr.io/singlestore-public/alpine:3.21.3
+    env:
+      GH_PR_TITLE: "${{ github.event.pull_request.title }}"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_COMMIT_SHA }}
+          persist-credentials: false
+          sparse-checkout: ./scripts/lint-pull-request.sh
+
+      - name: Install bash
+        run: apk add bash
+
+      - name: Make script executable
+        run: chmod +x ./scripts/lint-pull-request.sh
+
+      - name: Run linter check for PR title
+        run: ./scripts/lint-pull-request.sh "${GH_PR_TITLE}"
