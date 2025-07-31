@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+
+jobs:
+  create-release-tag:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.title, 'Release v')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from PR title
+        id: extract_version
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          VERSION=$(echo "$PR_TITLE" | sed -n 's/^Release v\(.*\)$/\1/p')
+          if [ -z "$VERSION" ]; then
+            echo "❌ Could not extract version from PR title: $PR_TITLE"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "✅ Extracted version: $VERSION"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          if ! echo "$VERSION" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "❌ Invalid version format: $VERSION"
+            exit 1
+          fi
+          echo "✅ Version format is valid: $VERSION"
+
+      - name: Check if tag already exists
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          if git tag -l "v$VERSION" | grep -q "v$VERSION"; then
+            echo "❌ Tag v$VERSION already exists"
+            exit 1
+          fi
+          echo "✅ Tag v$VERSION does not exist yet"
+
+      - name: Create and push tag
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+          TAG_NAME="v$VERSION"
+
+          # Create tag message
+          SANITIZED_BODY=$(printf "%q" "${{ github.event.pull_request.body }}")
+
+          TAG_MESSAGE="Release $TAG_NAME
+
+          $SANITIZED_BODY
+
+          Merged PR: ${{ github.event.pull_request.html_url }}"
+
+          # Create annotated tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" -m "$TAG_MESSAGE"
+          git push origin "$TAG_NAME"
+
+          echo "✅ Created and pushed tag: $TAG_NAME"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.extract_version.outputs.version }}
+          name: Release v${{ steps.extract_version.outputs.version }}
+          body: ${{ github.event.pull_request.body }}
+          draft: false
+          prerelease: false
