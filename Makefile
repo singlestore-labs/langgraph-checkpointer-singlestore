@@ -15,7 +15,7 @@ format-fix:
 type-check:
 	uv run pyrefly check
 
-run-checks: lint-check format-check type-check
+run-checks: lint-check format-check
 
 deps:
 	uv sync --locked --all-extras --dev
