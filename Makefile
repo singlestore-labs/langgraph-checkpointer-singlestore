@@ -1,4 +1,4 @@
-.PHONY: lint-check lint-fix format-check format-fix type-check run-checks deps install tests uninstall clean release setup-db teardown-db reset-db test-connection
+.PHONY: lint-check lint-fix format-check format-fix type-check run-checks deps install tests uninstall clean release setup-db teardown-db reset-db status-db test-connection
 
 lint-check:
 	uv run ruff check
@@ -42,24 +42,44 @@ release:
 	uv run scripts/release.py
 
 setup-db: ## Start SingleStore database
-	@echo "Starting SingleStore database..."
-	@echo "Checking for existing containers..."
-	@docker compose -f tests/compose-singlestore.yml down -v 2>/dev/null || true
-	@echo "Starting fresh container..."
-	docker compose -f tests/compose-singlestore.yml up -d
-	@echo "Waiting for database to be ready and initialized..."
-	@echo "Waiting for database..."
-	@until docker compose -f tests/compose-singlestore.yml exec -T singlestore-test singlestore -u root -ptest_password_123 -e "SELECT 1" >/dev/null 2>&1; do echo "Waiting for database..."; sleep 5; done
-	@echo "Creating test databases..."
-	@docker compose -f tests/compose-singlestore.yml exec -T singlestore-test singlestore -u root -ptest_password_123 -e "CREATE DATABASE IF NOT EXISTS test_db; CREATE DATABASE IF NOT EXISTS test_example; CREATE DATABASE IF NOT EXISTS test_example_async;"
-	@echo "Verifying database initialization..."
-	@docker compose -f tests/compose-singlestore.yml exec -T singlestore-test singlestore -u root -ptest_password_123 -e "SHOW DATABASES;" | grep test_db || echo "Database initialization pending..."
+	@echo "🚀 Starting SingleStore database..."
+	@docker compose -f tests/compose-singlestore.yml down -v >/dev/null 2>&1 || true
+	@docker compose -f tests/compose-singlestore.yml up -d >/dev/null 2>&1
+	@echo "⏳ Waiting for database to be ready..."
+	@timeout 30 bash -c 'i=0; until docker compose -f tests/compose-singlestore.yml ps | grep -q "healthy"; do i=$$((i+3)); echo "⏳ Still waiting for database... ($$i/30s)"; sleep 3; done; echo "✅ Database is ready!"' || (echo "❌ Database failed to start within 30 seconds"; exit 1)
+	@echo "📝 Initializing database schema..."
+	@docker compose -f tests/compose-singlestore.yml exec -T singlestore-test singlestore -u root -ptest < tests/init.sql >/dev/null 2>&1 && echo "✅ Schema initialized successfully"
+	@echo "✅ Database ready and initialized"
+	@echo "   • Port: 33071"
+	@echo "   • Web UI: http://localhost:18091"
+	@echo "   • Test databases:"
+	@docker compose -f tests/compose-singlestore.yml exec -T singlestore-test singlestore -u root -ptest -e "SHOW DATABASES;" 2>/dev/null | grep -E "test" | sed 's/^/     /'
 
 teardown-db: ## Stop SingleStore database
-	@echo "Stopping SingleStore database..."
-	docker compose -f tests/compose-singlestore.yml down -v
+	@echo "🛑 Stopping SingleStore database..."
+	@docker compose -f tests/compose-singlestore.yml down -v >/dev/null 2>&1
+	@echo "✅ Database stopped"
 
 reset-db: teardown-db setup-db ## Reset SingleStore database (stop and start fresh)
 
+status-db: ## Check SingleStore database status
+	@echo "🔍 Checking database status..."
+	@if docker compose -f tests/compose-singlestore.yml ps | grep -q "singlestore-test.*Up"; then \
+		echo "✅ SingleStore database is running"; \
+		echo "   • Port: 33071"; \
+		echo "   • Web UI: http://localhost:18091"; \
+		echo "   • Management: http://localhost:19191"; \
+	else \
+		echo "❌ SingleStore database is not running"; \
+		echo "   Run 'make setup-db' to start it"; \
+	fi
+
 test-connection: ## Test connection from host using custom port
-	mysql -h localhost -P 33071 -u root -ptest_password_123 -e "SHOW DATABASES;" 2>/dev/null || echo "❌ Cannot connect from host - ensure SingleStore is running"
+	@echo "🔍 Testing database connection..."
+	@echo "⏳ Attempting to connect..."
+	@if docker compose -f tests/compose-singlestore.yml exec -T singlestore-test singlestore -u root -ptest -e "SHOW DATABASES;" >/dev/null 2>&1; then \
+		echo "✅ Connection successful - database is responding"; \
+	else \
+		echo "❌ Connection failed - ensure SingleStore is running"; \
+		echo "   Try: make setup-db"; \
+	fi
