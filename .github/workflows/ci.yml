@@ -6,9 +6,26 @@ on:
   pull_request:
     branches:
       - master
+
 jobs:
   validation:
     runs-on: ubuntu-latest
+    env:
+      SINGLESTORE_HOST: 127.0.0.1
+      SINGLESTORE_PORT: 33071
+      SINGLESTORE_USER: root
+      SINGLESTORE_PASSWORD: test
+      SINGLESTORE_DATABASE: test_db
+    services:
+      singlestoredb:
+        image: ghcr.io/singlestore-labs/singlestoredb-dev:latest
+        ports:
+          - 33071:3306  # MySQL port
+          - 18091:8080  # Web UI port
+          - 19191:9000  # Management port
+        env:
+          ROOT_PASSWORD: test
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,6 +44,14 @@ jobs:
 
       - name: Formatting Check
         run: make format-check
+
+      - name: Sanity check using mysql client
+        run: |
+          mysql -u root -ptest -e "SELECT 1" -h 127.0.0.1 -P 33071
+
+      - name: Create test databases
+        run: |
+          mysql -u root -ptest -h 127.0.0.1 -P 33071 -e "CREATE DATABASE IF NOT EXISTS test_db; CREATE DATABASE IF NOT EXISTS test_example; CREATE DATABASE IF NOT EXISTS test_example_async; SHOW DATABASES;"
 
       - name: Run Tests
         run: make tests

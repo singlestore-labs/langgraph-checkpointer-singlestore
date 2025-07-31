@@ -4,21 +4,21 @@ import pytest
 import singlestoredb
 from singlestoredb.connection import Connection
 
-DEFAULT_SINGLESTORE_URI = "root:test_password_123@localhost:33071"
-DEFAULT_URI = "root:test_password_123@localhost:33071/test_db"
+DEFAULT_URI_WITHOUT_DB = "root:test@127.0.0.1:33071"
+DEFAULT_URI_WITH_DB = "root:test@127.0.0.1:33071/test_db"
 
 
 @pytest.fixture(scope="function")
 def conn() -> Iterator[Connection]:
 	"""Sync connection fixture for SingleStore."""
-	with singlestoredb.connect(DEFAULT_URI, autocommit=True, results_type="dict") as conn:
+	with singlestoredb.connect(DEFAULT_URI_WITH_DB, autocommit=True, results_type="dict") as conn:
 		yield conn
 
 
 @pytest.fixture(scope="function")
 async def aconn() -> AsyncIterator[Connection]:
 	"""Async connection fixture for SingleStore."""
-	with singlestoredb.connect(DEFAULT_URI, autocommit=True, results_type="dict") as conn:
+	async with singlestoredb.connect(DEFAULT_URI_WITH_DB, autocommit=True, results_type="dict") as conn:
 		yield conn
 
 
