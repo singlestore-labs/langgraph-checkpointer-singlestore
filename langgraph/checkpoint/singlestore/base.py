@@ -111,7 +111,7 @@ GROUP BY
 SELECT_PENDING_SENDS_SQL = f"""
 select
     checkpoint_id,
-    JSON_AGG(JSON_BUILD_ARRAY(type, `blob`) order by task_path, task_id, idx) as sends
+    JSON_AGG(JSON_BUILD_ARRAY(type, HEX(`blob`)) order by task_path, task_id, idx) as sends
 from checkpoint_writes
 where thread_id = %s
     and checkpoint_id IN (%s)
@@ -169,7 +169,7 @@ class BaseSingleStoreSaver(BaseCheckpointSaver[str]):
             return
         # add to values
         enc, blob = self.serde.dumps_typed(
-            [self.serde.loads_typed((c.decode(), b)) for c, b in pending_sends],
+            [self.serde.loads_typed((c, bytes.fromhex(b) if isinstance(b, str) else b)) for c, b in pending_sends],
         )
         channel_values.append((TASKS.encode(), enc.encode(), blob))
         # add to versions
@@ -294,11 +294,24 @@ class BaseSingleStoreSaver(BaseCheckpointSaver[str]):
                 wheres.append("c.checkpoint_id = %s ")
                 param_values.append(checkpoint_id)
 
-        # construct predicate for metadata filter
+                # construct predicate for metadata filter
         if filter:
+            # SingleStore-compatible metadata filtering using JSON_EXTRACT_JSON
             import json
-            wheres.append("JSON_CONTAINS(c.metadata, %s)")
-            param_values.append(json.dumps(filter))
+            filter_conditions = []
+            for key, value in filter.items():
+                if isinstance(value, dict):
+                    # For nested objects, we need to check each key-value pair
+                    for nested_key, nested_value in value.items():
+                        filter_conditions.append(f"JSON_EXTRACT_JSON(c.metadata, '{key}', '{nested_key}') = %s")
+                        param_values.append(json.dumps(nested_value))
+                else:
+                    # For simple key-value pairs
+                    filter_conditions.append(f"JSON_EXTRACT_JSON(c.metadata, '{key}') = %s")
+                    param_values.append(json.dumps(value))
+
+            if filter_conditions:
+                wheres.append(f"({' AND '.join(filter_conditions)})")
 
         # construct predicate for `before`
         if before is not None:

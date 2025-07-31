@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+
 from langgraph.checkpoint.base import (
 	WRITES_IDX_MAP,
 	ChannelVersions,
@@ -16,14 +17,13 @@ from langgraph.checkpoint.base import (
 	get_checkpoint_id,
 	get_checkpoint_metadata,
 )
-
+from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.singlestore import _internal
 from langgraph.checkpoint.singlestore.base import BaseSingleStoreSaver
-from langgraph.checkpoint.serde.base import SerializerProtocol
 
 try:
 	import singlestoredb
-	from singlestoredb.connection import Cursor, Connection
+	from singlestoredb.connection import Connection, Cursor
 except ImportError:
 	raise ImportError(
 		"singlestoredb is required for SingleStore checkpointer. Install it with: pip install singlestoredb"
@@ -137,13 +137,26 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 					grouped_by_parent[value["parent_checkpoint_id"]].append(value)
 				for sends in cur:
 					for value in grouped_by_parent[sends["checkpoint_id"]]:
-						if value["channel_values"] is None:
-							value["channel_values"] = []
+						# Parse channel_values if it's a JSON string
+						channel_values = value.get("channel_values")
+						if channel_values is None:
+							channel_values = []
+						elif isinstance(channel_values, str):
+							import json
+
+							try:
+								channel_values = json.loads(channel_values)
+							except json.JSONDecodeError:
+								channel_values = []
+
 						self._migrate_pending_sends(
 							sends["sends"],
 							value["checkpoint"],
-							value["channel_values"],
+							channel_values,
 						)
+						# Update the checkpoint's channel_values with the migrated data
+						if channel_values:
+							value["checkpoint"]["channel_values"] = self._load_blobs(channel_values)
 			for value in values:
 				yield self._load_checkpoint_tuple(value)
 
@@ -206,16 +219,28 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 					(thread_id, value["parent_checkpoint_id"]),
 				)
 				if sends := cur.fetchone():
-					if value["channel_values"] is None:
-						value["channel_values"] = []
+					# Parse channel_values if it's a JSON string
+					channel_values = value.get("channel_values")
+					if channel_values is None:
+						channel_values = []
+					elif isinstance(channel_values, str):
+						import json
+
+						try:
+							channel_values = json.loads(channel_values)
+						except json.JSONDecodeError:
+							channel_values = []
+
 					self._migrate_pending_sends(
 						sends["sends"],
 						value["checkpoint"],
-						value["channel_values"],
+						channel_values,
 					)
+					# Update the checkpoint's channel_values with the migrated data
+					if channel_values:
+						value["checkpoint"]["channel_values"] = self._load_blobs(channel_values)
 
 			return self._load_checkpoint_tuple(value)
-
 
 	def put(
 		self,
@@ -342,8 +367,6 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 				(str(thread_id),),
 			)
 
-
-
 	@contextmanager
 	def _cursor(self) -> Iterator[Cursor]:
 		"""Create a database cursor as a context manager."""
@@ -377,9 +400,13 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 				if channel_array:  # Only process if not empty
 					channel_values_parsed = [
 						(
-							item[0].encode("utf-8"),  # channel as bytes
-							item[1].encode("utf-8"),  # type as bytes
-							bytes.fromhex(item[2]) if item[2] else b"",  # blob from hex to bytes
+							item[0].encode("utf-8") if isinstance(item[0], str) else item[0],  # channel as bytes
+							item[1].encode("utf-8") if isinstance(item[1], str) else item[1],  # type as bytes
+							bytes.fromhex(item[2])
+							if isinstance(item[2], str) and item[2]
+							else item[2]
+							if item[2]
+							else b"",  # blob from hex to bytes
 						)
 						for item in channel_array
 					]

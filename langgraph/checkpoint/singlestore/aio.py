@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import singlestoredb
 from collections import defaultdict
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+import singlestoredb
 from langchain_core.runnables import RunnableConfig
 from singlestoredb.connection import Connection, Cursor
+
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
     ChannelVersions,
@@ -18,10 +19,10 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
-
+from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.singlestore import _ainternal
 from langgraph.checkpoint.singlestore.base import BaseSingleStoreSaver
-from langgraph.checkpoint.serde.base import SerializerProtocol
+
 
 class AsyncSingleStoreSaver(BaseSingleStoreSaver):
     """Asynchronous checkpointer that stores checkpoints in a SingleStore database."""
@@ -133,13 +134,25 @@ class AsyncSingleStoreSaver(BaseSingleStoreSaver):
                 sends_results = await asyncio.to_thread(cur.fetchall)
                 for sends in sends_results:
                     for value in grouped_by_parent[sends["checkpoint_id"]]:
-                        if value["channel_values"] is None:
-                            value["channel_values"] = []
+                        # Parse channel_values if it's a JSON string
+                        channel_values = value.get("channel_values")
+                        if channel_values is None:
+                            channel_values = []
+                        elif isinstance(channel_values, str):
+                            import json
+                            try:
+                                channel_values = json.loads(channel_values)
+                            except json.JSONDecodeError:
+                                channel_values = []
+
                         self._migrate_pending_sends(
                             sends["sends"],
                             value["checkpoint"],
-                            value["channel_values"],
+                            channel_values,
                         )
+                        # Update the checkpoint's channel_values with the migrated data
+                        if channel_values:
+                            value["checkpoint"]["channel_values"] = self._load_blobs(channel_values)
             for value in values:
                 yield await self._load_checkpoint_tuple(value)
 
@@ -188,13 +201,25 @@ class AsyncSingleStoreSaver(BaseSingleStoreSaver):
                     )
                     sends = await asyncio.to_thread(cur.fetchone)
                     if sends:
-                        if value["channel_values"] is None:
-                            value["channel_values"] = []
+                        # Parse channel_values if it's a JSON string
+                        channel_values = value.get("channel_values")
+                        if channel_values is None:
+                            channel_values = []
+                        elif isinstance(channel_values, str):
+                            import json
+                            try:
+                                channel_values = json.loads(channel_values)
+                            except json.JSONDecodeError:
+                                channel_values = []
+
                         self._migrate_pending_sends(
                             sends["sends"],
                             value["checkpoint"],
-                            value["channel_values"],
+                            channel_values,
                         )
+                        # Update the checkpoint's channel_values with the migrated data
+                        if channel_values:
+                            value["checkpoint"]["channel_values"] = self._load_blobs(channel_values)
 
                 return await self._load_checkpoint_tuple(value)
             except Exception as e:
@@ -471,7 +496,7 @@ class AsyncSingleStoreSaver(BaseSingleStoreSaver):
         while True:
             try:
                 yield asyncio.run_coroutine_threadsafe(
-                    anext(aiter_),  # type: ignore[arg-type]  # noqa: F821
+                    anext(aiter_),  # type: ignore[arg-type]
                     self.loop,
                 ).result()
             except StopAsyncIteration:
