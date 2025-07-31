@@ -24,10 +24,10 @@ from langgraph.checkpoint.singlestore.base import BaseSingleStoreSaver
 try:
 	import singlestoredb
 	from singlestoredb.connection import Connection, Cursor
-except ImportError:
+except ImportError as err:
 	raise ImportError(
 		"singlestoredb is required for SingleStore checkpointer. Install it with: pip install singlestoredb"
-	)
+	) from err
 
 # Import async implementation
 try:
@@ -56,10 +56,10 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		"""Create a new SingleStoreSaver instance from a connection string.
 
 		Args:
-		    conn_string: The SingleStore connection string.
+			conn_string: The SingleStore connection string.
 
 		Returns:
-		    SingleStoreSaver: A new SingleStoreSaver instance.
+			SingleStoreSaver: A new SingleStoreSaver instance.
 		"""
 		with singlestoredb.connect(conn_string, autocommit=True, results_type="dict") as conn:
 			yield cls(conn)
@@ -75,10 +75,7 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 			cur.execute(self.MIGRATIONS[0])
 			cur.execute("SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1")
 			row = cur.fetchone()
-			if row is None:
-				version = -1
-			else:
-				version = row["v"]
+			version = -1 if row is None else row["v"]
 			for v, migration in zip(
 				range(version + 1, len(self.MIGRATIONS)),
 				self.MIGRATIONS[version + 1 :],
@@ -105,13 +102,13 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		on the provided config. The checkpoints are ordered by checkpoint ID in descending order (newest first).
 
 		Args:
-		    config: The config to use for listing the checkpoints.
-		    filter: Additional filtering criteria for metadata. Defaults to None.
-		    before: If provided, only checkpoints before the specified checkpoint ID are returned. Defaults to None.
-		    limit: The maximum number of checkpoints to return. Defaults to None.
+			config: The config to use for listing the checkpoints.
+			filter: Additional filtering criteria for metadata. Defaults to None.
+			before: If provided, only checkpoints before the specified checkpoint ID are returned. Defaults to None.
+			limit: The maximum number of checkpoints to return. Defaults to None.
 
 		Yields:
-		    Iterator[CheckpointTuple]: An iterator of checkpoint tuples.
+			Iterator[CheckpointTuple]: An iterator of checkpoint tuples.
 		"""
 		where, args = self._search_where(config, filter, before)
 		query = self.SELECT_SQL.replace("{{where}}", where) + " ORDER BY c.checkpoint_id DESC"
@@ -169,10 +166,10 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		for the given thread ID is retrieved.
 
 		Args:
-		    config: The config to use for retrieving the checkpoint.
+			config: The config to use for retrieving the checkpoint.
 
 		Returns:
-		    Optional[Checkpoint]: The retrieved checkpoint, or None if no matching checkpoint was found.
+			Optional[Checkpoint]: The retrieved checkpoint, or None if no matching checkpoint was found.
 		"""
 		checkpoint_tuple = self.get_tuple(config)
 		return checkpoint_tuple.checkpoint if checkpoint_tuple else None
@@ -186,10 +183,10 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		for the given thread ID is retrieved.
 
 		Args:
-		    config: The config to use for retrieving the checkpoint.
+			config: The config to use for retrieving the checkpoint.
 
 		Returns:
-		    Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+			Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
 		"""
 		thread_id = config["configurable"]["thread_id"]
 		checkpoint_id = get_checkpoint_id(config)
@@ -255,13 +252,13 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		with the provided config and its parent config (if any).
 
 		Args:
-		    config: The config to associate with the checkpoint.
-		    checkpoint: The checkpoint to save.
-		    metadata: Additional metadata to save with the checkpoint.
-		    new_versions: New channel versions as of this write.
+			config: The config to associate with the checkpoint.
+			checkpoint: The checkpoint to save.
+			metadata: Additional metadata to save with the checkpoint.
+			new_versions: New channel versions as of this write.
 
 		Returns:
-		    RunnableConfig: Updated configuration after storing the checkpoint.
+			RunnableConfig: Updated configuration after storing the checkpoint.
 		"""
 		configurable = config["configurable"].copy()
 		thread_id = configurable.pop("thread_id")
@@ -281,7 +278,7 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		# others are stored in blobs table
 		blob_values = {}
 		for k, v in checkpoint["channel_values"].items():
-			if v is None or isinstance(v, (str, int, float, bool)):
+			if v is None or isinstance(v, str | int | float | bool):
 				pass
 			else:
 				blob_values[k] = copy["channel_values"].pop(k)
@@ -323,10 +320,10 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		This method saves intermediate writes associated with a checkpoint to the SingleStore database.
 
 		Args:
-		    config: Configuration of the related checkpoint.
-		    writes: List of writes to store.
-		    task_id: Identifier for the task creating the writes.
-		    task_path: Path of the task creating the writes.
+			config: Configuration of the related checkpoint.
+			writes: List of writes to store.
+			task_id: Identifier for the task creating the writes.
+			task_path: Path of the task creating the writes.
 		"""
 		query = (
 			self.UPSERT_CHECKPOINT_WRITES_SQL
@@ -348,10 +345,10 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 		"""Delete all checkpoints and writes associated with a thread ID.
 
 		Args:
-		    thread_id: The thread ID to delete.
+		thread_id: The thread ID to delete.
 
 		Returns:
-		    None
+		None
 		"""
 		with self._cursor() as cur:
 			cur.execute(
@@ -370,21 +367,20 @@ class SingleStoreSaver(BaseSingleStoreSaver):
 	@contextmanager
 	def _cursor(self) -> Iterator[Cursor]:
 		"""Create a database cursor as a context manager."""
-		with self.lock, _internal.get_connection(self.conn) as conn:
-			with conn.cursor() as cur:
-				yield cur
+		with self.lock, _internal.get_connection(self.conn) as conn, conn.cursor() as cur:
+			yield cur
 
 	def _load_checkpoint_tuple(self, value: dict[str, Any]) -> CheckpointTuple:
 		"""
 		Convert a database row into a CheckpointTuple object.
 
 		Args:
-		    value: A row from the database containing checkpoint data.
+		value: A row from the database containing checkpoint data.
 
 		Returns:
-		    CheckpointTuple: A structured representation of the checkpoint,
-		    including its configuration, metadata, parent checkpoint (if any),
-		    and pending writes.
+		CheckpointTuple: A structured representation of the checkpoint,
+		including its configuration, metadata, parent checkpoint (if any),
+		and pending writes.
 		"""
 
 		# Parse channel_values JSON array and convert to the format expected by _load_blobs

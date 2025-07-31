@@ -2,29 +2,29 @@ from __future__ import annotations
 
 import random
 from collections.abc import Sequence
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
 
 from langgraph.checkpoint.base import (
-    WRITES_IDX_MAP,
-    BaseCheckpointSaver,
-    ChannelVersions,
-    get_checkpoint_id,
+	WRITES_IDX_MAP,
+	BaseCheckpointSaver,
+	ChannelVersions,
+	get_checkpoint_id,
 )
 from langgraph.checkpoint.serde.types import TASKS
 
-MetadataInput = Optional[dict[str, Any]]
+MetadataInput = dict[str, Any] | None
 
 """
 To add a new migration, add a new string to the MIGRATIONS list.
 The position of the migration in the list is the version number.
 """
 MIGRATIONS = [
-    """CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_migrations (
+	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_migrations (
     v INTEGER PRIMARY KEY
 );""",
-    """CREATE ROWSTORE TABLE IF NOT EXISTS checkpoints (
+	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoints (
     thread_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     checkpoint_id TEXT NOT NULL,
@@ -34,7 +34,7 @@ MIGRATIONS = [
     metadata JSON NOT NULL DEFAULT '{}',
     PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
 );""",
-    """CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_blobs (
+	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_blobs (
     thread_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     channel TEXT NOT NULL,
@@ -43,7 +43,7 @@ MIGRATIONS = [
     `blob` LONGBLOB,
     PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
 );""",
-    """CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_writes (
+	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_writes (
     thread_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     checkpoint_id TEXT NOT NULL,
@@ -54,20 +54,20 @@ MIGRATIONS = [
     `blob` LONGBLOB NOT NULL,
     PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
 );""",
-    "ALTER TABLE checkpoint_blobs MODIFY COLUMN `blob` LONGBLOB NULL;",
-    # NOTE: this is a no-op migration to ensure that the versions in the migrations table are correct.
-    # This is necessary due to an empty migration previously added to the list.
-    "SELECT 1;",
-    """
+	"ALTER TABLE checkpoint_blobs MODIFY COLUMN `blob` LONGBLOB NULL;",
+	# NOTE: this is a no-op migration to ensure that the versions in the migrations table are correct.
+	# This is necessary due to an empty migration previously added to the list.
+	"SELECT 1;",
+	"""
     CREATE INDEX checkpoints_thread_id_idx ON checkpoints(thread_id);
     """,
-    """
+	"""
     CREATE INDEX checkpoint_blobs_thread_id_idx ON checkpoint_blobs(thread_id);
     """,
-    """
+	"""
     CREATE INDEX checkpoint_writes_thread_id_idx ON checkpoint_writes(thread_id);
     """,
-    """ALTER TABLE checkpoint_writes ADD COLUMN task_path TEXT NOT NULL DEFAULT '';""",
+	"""ALTER TABLE checkpoint_writes ADD COLUMN task_path TEXT NOT NULL DEFAULT '';""",
 ]
 
 SELECT_SQL = """
@@ -136,7 +136,9 @@ UPSERT_CHECKPOINTS_SQL = """
 """
 
 UPSERT_CHECKPOINT_WRITES_SQL = """
-    INSERT INTO checkpoint_writes (thread_id, checkpoint_ns, checkpoint_id, task_id, task_path, idx, channel, type, `blob`)
+    INSERT INTO checkpoint_writes (
+        thread_id, checkpoint_ns, checkpoint_id, task_id, task_path, idx, channel, type, `blob`
+    )
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON DUPLICATE KEY UPDATE
         channel = VALUES(channel),
@@ -145,180 +147,171 @@ UPSERT_CHECKPOINT_WRITES_SQL = """
 """
 
 INSERT_CHECKPOINT_WRITES_SQL = """
-    INSERT IGNORE INTO checkpoint_writes (thread_id, checkpoint_ns, checkpoint_id, task_id, task_path, idx, channel, type, `blob`)
+    INSERT IGNORE INTO checkpoint_writes (
+        thread_id, checkpoint_ns, checkpoint_id, task_id, task_path, idx, channel, type, `blob`
+    )
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
 class BaseSingleStoreSaver(BaseCheckpointSaver[str]):
-    SELECT_SQL = SELECT_SQL
-    SELECT_PENDING_SENDS_SQL = SELECT_PENDING_SENDS_SQL
-    MIGRATIONS = MIGRATIONS
-    UPSERT_CHECKPOINT_BLOBS_SQL = UPSERT_CHECKPOINT_BLOBS_SQL
-    UPSERT_CHECKPOINTS_SQL = UPSERT_CHECKPOINTS_SQL
-    UPSERT_CHECKPOINT_WRITES_SQL = UPSERT_CHECKPOINT_WRITES_SQL
-    INSERT_CHECKPOINT_WRITES_SQL = INSERT_CHECKPOINT_WRITES_SQL
+	SELECT_SQL = SELECT_SQL
+	SELECT_PENDING_SENDS_SQL = SELECT_PENDING_SENDS_SQL
+	MIGRATIONS = MIGRATIONS
+	UPSERT_CHECKPOINT_BLOBS_SQL = UPSERT_CHECKPOINT_BLOBS_SQL
+	UPSERT_CHECKPOINTS_SQL = UPSERT_CHECKPOINTS_SQL
+	UPSERT_CHECKPOINT_WRITES_SQL = UPSERT_CHECKPOINT_WRITES_SQL
+	INSERT_CHECKPOINT_WRITES_SQL = INSERT_CHECKPOINT_WRITES_SQL
 
-    def _migrate_pending_sends(
-        self,
-        pending_sends: list[tuple[bytes, bytes]],
-        checkpoint: dict[str, Any],
-        channel_values: list[tuple[bytes, bytes, bytes]],
-    ) -> None:
-        if not pending_sends:
-            return
-        # add to values
-        enc, blob = self.serde.dumps_typed(
-            [self.serde.loads_typed((c, bytes.fromhex(b) if isinstance(b, str) else b)) for c, b in pending_sends],
-        )
-        channel_values.append((TASKS.encode(), enc.encode(), blob))
-        # add to versions
-        checkpoint["channel_versions"][TASKS] = (
-            max(checkpoint["channel_versions"].values())
-            if checkpoint["channel_versions"]
-            else self.get_next_version(None, None)
-        )
+	def _migrate_pending_sends(
+		self,
+		pending_sends: list[tuple[bytes, bytes]],
+		checkpoint: dict[str, Any],
+		channel_values: list[tuple[bytes, bytes, bytes]],
+	) -> None:
+		if not pending_sends:
+			return
+		# add to values
+		enc, blob = self.serde.dumps_typed(
+			[self.serde.loads_typed((c, bytes.fromhex(b) if isinstance(b, str) else b)) for c, b in pending_sends],
+		)
+		channel_values.append((TASKS.encode(), enc.encode(), blob))
+		# add to versions
+		checkpoint["channel_versions"][TASKS] = (
+			max(checkpoint["channel_versions"].values())
+			if checkpoint["channel_versions"]
+			else self.get_next_version(None, None)
+		)
 
-    def _load_blobs(
-        self, blob_values: list[tuple[bytes, bytes, bytes]]
-    ) -> dict[str, Any]:
-        if not blob_values:
-            return {}
-        return {
-            k.decode(): self.serde.loads_typed((t.decode(), v))
-            for k, t, v in blob_values
-            if t.decode() != "empty"
-        }
+	def _load_blobs(self, blob_values: list[tuple[bytes, bytes, bytes]]) -> dict[str, Any]:
+		if not blob_values:
+			return {}
+		return {k.decode(): self.serde.loads_typed((t.decode(), v)) for k, t, v in blob_values if t.decode() != "empty"}
 
-    def _dump_blobs(
-        self,
-        thread_id: str,
-        checkpoint_ns: str,
-        values: dict[str, Any],
-        versions: ChannelVersions,
-    ) -> list[tuple[str, str, str, str, str, bytes | None]]:
-        if not versions:
-            return []
+	def _dump_blobs(
+		self,
+		thread_id: str,
+		checkpoint_ns: str,
+		values: dict[str, Any],
+		versions: ChannelVersions,
+	) -> list[tuple[str, str, str, str, str, bytes | None]]:
+		if not versions:
+			return []
 
-        return [
-            (
-                thread_id,
-                checkpoint_ns,
-                k,
-                cast(str, ver),
-                *(
-                    self.serde.dumps_typed(values[k])
-                    if k in values
-                    else ("empty", None)
-                ),
-            )
-            for k, ver in versions.items()
-        ]
+		return [
+			(
+				thread_id,
+				checkpoint_ns,
+				k,
+				cast(str, ver),
+				*(self.serde.dumps_typed(values[k]) if k in values else ("empty", None)),
+			)
+			for k, ver in versions.items()
+		]
 
-    def _load_writes(
-        self, writes: list[tuple[bytes, bytes, bytes, bytes]]
-    ) -> list[tuple[str, str, Any]]:
-        return (
-            [
-                (
-                    tid.decode(),
-                    channel.decode(),
-                    self.serde.loads_typed((t.decode(), v)),
-                )
-                for tid, channel, t, v in writes
-            ]
-            if writes
-            else []
-        )
+	def _load_writes(self, writes: list[tuple[bytes, bytes, bytes, bytes]]) -> list[tuple[str, str, Any]]:
+		return (
+			[
+				(
+					tid.decode(),
+					channel.decode(),
+					self.serde.loads_typed((t.decode(), v)),
+				)
+				for tid, channel, t, v in writes
+			]
+			if writes
+			else []
+		)
 
-    def _dump_writes(
-        self,
-        thread_id: str,
-        checkpoint_ns: str,
-        checkpoint_id: str,
-        task_id: str,
-        task_path: str,
-        writes: Sequence[tuple[str, Any]],
-    ) -> list[tuple[str, str, str, str, str, int, str, str, bytes]]:
-        return [
-            (
-                thread_id,
-                checkpoint_ns,
-                checkpoint_id,
-                task_id,
-                task_path,
-                WRITES_IDX_MAP.get(channel, idx),
-                channel,
-                *self.serde.dumps_typed(value),
-            )
-            for idx, (channel, value) in enumerate(writes)
-        ]
+	def _dump_writes(
+		self,
+		thread_id: str,
+		checkpoint_ns: str,
+		checkpoint_id: str,
+		task_id: str,
+		task_path: str,
+		writes: Sequence[tuple[str, Any]],
+	) -> list[tuple[str, str, str, str, str, int, str, str, bytes]]:
+		return [
+			(
+				thread_id,
+				checkpoint_ns,
+				checkpoint_id,
+				task_id,
+				task_path,
+				WRITES_IDX_MAP.get(channel, idx),
+				channel,
+				*self.serde.dumps_typed(value),
+			)
+			for idx, (channel, value) in enumerate(writes)
+		]
 
-    def get_next_version(self, current: str | None, channel: None) -> str:
-        if current is None:
-            current_v = 0
-        elif isinstance(current, int):
-            current_v = current
-        else:
-            current_v = int(current.split(".")[0])
-        next_v = current_v + 1
-        next_h = random.random()
-        return f"{next_v:032}.{next_h:016}"
+	def get_next_version(self, current: str | None, channel: None) -> str:
+		if current is None:
+			current_v = 0
+		elif isinstance(current, int):
+			current_v = current
+		else:
+			current_v = int(current.split(".")[0])
+		next_v = current_v + 1
+		next_h = random.random()
+		return f"{next_v:032}.{next_h:016}"
 
-    def _search_where(
-        self,
-        config: RunnableConfig | None,
-        filter: MetadataInput,
-        before: RunnableConfig | None = None,
-    ) -> tuple[str, list[Any]]:
-        """Return WHERE clause predicates for alist() given config, filter, before.
+	def _search_where(
+		self,
+		config: RunnableConfig | None,
+		filter: MetadataInput,
+		before: RunnableConfig | None = None,
+	) -> tuple[str, list[Any]]:
+		"""Return WHERE clause predicates for alist() given config, filter, before.
 
-        This method returns a tuple of a string and a list of values. The string
-        is the parametered WHERE clause predicate (including the WHERE keyword):
-        "WHERE column1 = %s AND column2 = %s". The list of values contains the
-        values for each of the corresponding parameters.
-        """
-        wheres = []
-        param_values = []
+		This method returns a tuple of a string and a list of values. The string
+		is the parametered WHERE clause predicate (including the WHERE keyword):
+		"WHERE column1 = %s AND column2 = %s". The list of values contains the
+		values for each of the corresponding parameters.
+		"""
+		wheres = []
+		param_values = []
 
-        # construct predicate for config filter
-        if config:
-            wheres.append("c.thread_id = %s ")
-            param_values.append(config["configurable"]["thread_id"])
-            checkpoint_ns = config["configurable"].get("checkpoint_ns")
-            if checkpoint_ns is not None:
-                wheres.append("c.checkpoint_ns = %s")
-                param_values.append(checkpoint_ns)
+		# construct predicate for config filter
+		if config:
+			wheres.append("c.thread_id = %s ")
+			param_values.append(config["configurable"]["thread_id"])
+			checkpoint_ns = config["configurable"].get("checkpoint_ns")
+			if checkpoint_ns is not None:
+				wheres.append("c.checkpoint_ns = %s")
+				param_values.append(checkpoint_ns)
 
-            if checkpoint_id := get_checkpoint_id(config):
-                wheres.append("c.checkpoint_id = %s ")
-                param_values.append(checkpoint_id)
+			if checkpoint_id := get_checkpoint_id(config):
+				wheres.append("c.checkpoint_id = %s ")
+				param_values.append(checkpoint_id)
 
-                # construct predicate for metadata filter
-        if filter:
-            # SingleStore-compatible metadata filtering using JSON_EXTRACT_JSON
-            import json
-            filter_conditions = []
-            for key, value in filter.items():
-                if isinstance(value, dict):
-                    # For nested objects, we need to check each key-value pair
-                    for nested_key, nested_value in value.items():
-                        filter_conditions.append(f"JSON_EXTRACT_JSON(c.metadata, '{key}', '{nested_key}') = %s")
-                        param_values.append(json.dumps(nested_value))
-                else:
-                    # For simple key-value pairs
-                    filter_conditions.append(f"JSON_EXTRACT_JSON(c.metadata, '{key}') = %s")
-                    param_values.append(json.dumps(value))
+				# construct predicate for metadata filter
+		if filter:
+			# SingleStore-compatible metadata filtering using JSON_EXTRACT_JSON
+			import json
 
-            if filter_conditions:
-                wheres.append(f"({' AND '.join(filter_conditions)})")
+			filter_conditions = []
+			for key, value in filter.items():
+				if isinstance(value, dict):
+					# For nested objects, we need to check each key-value pair
+					for nested_key, nested_value in value.items():
+						filter_conditions.append(f"JSON_EXTRACT_JSON(c.metadata, '{key}', '{nested_key}') = %s")
+						param_values.append(json.dumps(nested_value))
+				else:
+					# For simple key-value pairs
+					filter_conditions.append(f"JSON_EXTRACT_JSON(c.metadata, '{key}') = %s")
+					param_values.append(json.dumps(value))
 
-        # construct predicate for `before`
-        if before is not None:
-            wheres.append("c.checkpoint_id < %s ")
-            param_values.append(get_checkpoint_id(before))
+			if filter_conditions:
+				wheres.append(f"({' AND '.join(filter_conditions)})")
 
-        return (
-            "WHERE " + " AND ".join(wheres) if wheres else "",
-            param_values,
-        )
+		# construct predicate for `before`
+		if before is not None:
+			wheres.append("c.checkpoint_id < %s ")
+			param_values.append(get_checkpoint_id(before))
+
+		return (
+			"WHERE " + " AND ".join(wheres) if wheres else "",
+			param_values,
+		)
