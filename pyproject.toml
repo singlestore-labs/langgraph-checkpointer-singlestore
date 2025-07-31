@@ -1,27 +1,15 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
 name = "langgraph-checkpoint-singlestore"
-version = "0.1.0"
-description = "LangGraph CheckpointSaver implementation using SingleStore database"
+dynamic = ["version"]
+description = "LangGraph CheckpointSaver implementation for SingleStore database"
 readme = "README.md"
+authors = [
+    { name = "Prudhvi", email = "pakula@singlestore.com" }
+]
 requires-python = ">=3.11"
 dependencies = [
     "langgraph-checkpoint>=2.1.1",
     "singlestoredb>=1.15.0",
-]
-authors = [
-    {name = "LangChain", email = "support@langchain.dev"},
-]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
 ]
 
 [project.optional-dependencies]
@@ -34,10 +22,16 @@ test = [
 ]
 dev = [
     "langgraph-checkpoint-singlestore[test]",
-    "black>=24.0.0",
     "ruff>=0.1.0",
-    "mypy>=1.8.0",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/singlestore-labs/langgraph-checkpointer-singlestore"
+"Bug Tracker" = "https://github.com/singlestore-labs/langgraph-checkpointer-singlestore/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 include = ["langgraph"]
