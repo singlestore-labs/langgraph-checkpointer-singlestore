@@ -1,7 +1,7 @@
 [project]
 name = "langgraph-checkpoint-singlestore"
 dynamic = ["version"]
-description = "LangGraph CheckpointSaver implementation for SingleStore database"
+description = "LangGraph CheckpointSaver implementation using SingleStore database"
 readme = "README.md"
 authors = [
     { name = "Prudhvi", email = "pakula@singlestore.com" }
