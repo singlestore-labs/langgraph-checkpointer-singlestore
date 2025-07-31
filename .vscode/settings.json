@@ -9,8 +9,8 @@
         "source.fixAll.ruff": "always",
         "source.organizeImports.ruff": "always"
     },
-    "cursorpyright.analysis.typeCheckingMode": "basic",
-    "python.analysis.typeCheckingMode": "basic",
+    "cursorpyright.analysis.typeCheckingMode": "off",
+    "python.analysis.typeCheckingMode": "off",
     "ruff.configuration": "ruff.toml",
     "ruff.fixAll": true,
     "ruff.organizeImports": true,
