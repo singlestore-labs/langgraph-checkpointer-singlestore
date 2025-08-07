@@ -9,6 +9,10 @@ By default `langgraph-checkpoint-singlestore` installs `singlestoredb` package. 
 ```bash
 pip install singlestoredb
 ```
+or
+```bash
+uv add singlestoredb
+```
 
 ## Usage
 
