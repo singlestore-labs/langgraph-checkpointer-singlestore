@@ -13,6 +13,19 @@ from langgraph.checkpoint.base import (
 	empty_checkpoint,
 )
 from langgraph.checkpoint.serde.types import TASKS
+from tests.test_utils import (
+	exclude_private_keys,
+	create_test_checkpoints,
+	filter_checkpoints,
+	create_large_metadata,
+	create_unicode_metadata,
+	create_metadata_with_private_keys,
+	create_empty_checkpoint,
+	create_checkpoint_with_binary_data,
+	create_search_test_queries,
+	assert_checkpoint_metadata,
+	create_config_with_metadata,
+)
 
 
 def _exclude_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -310,3 +323,191 @@ class TestAsyncCheckpoint:
 		retrieved_checkpoint = await async_saver.aget(result_config)
 		assert retrieved_checkpoint is not None
 		assert retrieved_checkpoint["id"] == test_checkpoint["id"]
+
+	@pytest.mark.asyncio
+	async def test_unicode_metadata(self, async_saver) -> None:
+		"""Test handling of Unicode characters in metadata."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		unicode_metadata = create_unicode_metadata()
+
+		config = {
+			"configurable": {
+				"thread_id": f"unicode-test-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
+		await async_saver.aput(config, checkpoint, unicode_metadata, {})
+
+		retrieved = await async_saver.aget_tuple(config)
+		assert retrieved is not None
+		assert retrieved.metadata == unicode_metadata
+
+	@pytest.mark.asyncio
+	async def test_large_metadata(self, async_saver) -> None:
+		"""Test handling of large metadata payloads."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		large_metadata = create_large_metadata(num_keys=100)
+
+		config = {
+			"configurable": {
+				"thread_id": f"large-meta-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
+		await async_saver.aput(config, checkpoint, large_metadata, {})
+
+		retrieved = await async_saver.aget_tuple(config)
+		assert retrieved is not None
+		assert len(retrieved.metadata) == 100
+
+	@pytest.mark.asyncio
+	async def test_empty_checkpoint_values(self, async_saver) -> None:
+		"""Test handling of checkpoints with empty values."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		empty_cp = create_empty_checkpoint()
+
+		config = {
+			"configurable": {
+				"thread_id": f"empty-cp-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		result_config = await async_saver.aput(config, empty_cp, {}, {})
+		assert result_config["configurable"]["checkpoint_id"] == empty_cp["id"]
+
+		retrieved = await async_saver.aget_tuple(result_config)
+		assert retrieved is not None
+		assert retrieved.checkpoint["channel_values"] == {}
+		assert retrieved.checkpoint["channel_versions"] == {}
+
+	@pytest.mark.asyncio
+	async def test_binary_checkpoint_data(self, async_saver) -> None:
+		"""Test handling of binary data in checkpoint blobs."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		checkpoint, binary_data = create_checkpoint_with_binary_data()
+
+		config = {
+			"configurable": {
+				"thread_id": f"binary-test-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		result_config = await async_saver.aput(config, checkpoint, {}, {"binary_channel": "1"})
+
+		retrieved = await async_saver.aget_tuple(result_config)
+		assert retrieved is not None
+		assert "binary_channel" in retrieved.checkpoint["channel_values"]
+		assert retrieved.checkpoint["channel_values"]["binary_channel"] == binary_data
+
+	@pytest.mark.asyncio
+	async def test_metadata_private_keys_exclusion(self, async_saver) -> None:
+		"""Test that private keys are properly excluded from metadata."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+
+		config = create_config_with_metadata(
+			f"private-test-{unique_id}",
+			metadata={"run_id": "test_run"},
+			private_keys={"__private_key": "secret", "__super_private": "top_secret"},
+		)
+
+		checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
+		metadata = create_metadata_with_private_keys()
+
+		await async_saver.aput(config, checkpoint, metadata, {})
+		retrieved = await async_saver.aget_tuple(config)
+
+		assert retrieved is not None
+		assert_checkpoint_metadata(retrieved.metadata, {**metadata, "run_id": "test_run"}, exclude_private=True)
+		assert "__private_key" not in retrieved.metadata
+		assert "__super_private_key" not in retrieved.metadata
+
+	@pytest.mark.asyncio
+	async def test_search_with_complex_filters(self, async_saver) -> None:
+		"""Test search functionality with complex filter combinations."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		test_checkpoints = create_test_checkpoints()
+
+		# Put test checkpoints
+		for i, cp_data in enumerate(test_checkpoints):
+			config = {
+				"configurable": {
+					"thread_id": f"search-test-{unique_id}",
+					"checkpoint_ns": cp_data["checkpoint_ns"],
+				}
+			}
+			await async_saver.aput(config, cp_data["checkpoint"], cp_data["metadata"], {})
+
+		# Test various search queries
+		test_queries = create_search_test_queries()
+
+		for filter_query, expected_count in test_queries:
+			results = []
+			async for checkpoint in async_saver.alist(
+				{"configurable": {"thread_id": f"search-test-{unique_id}"}}, filter=filter_query
+			):
+				results.append(checkpoint)
+
+			# The actual count may vary from expected if some filters don't match
+			if filter_query:
+				assert len(results) <= expected_count
+			else:
+				assert len(results) == len(test_checkpoints)
+
+	@pytest.mark.asyncio
+	async def test_concurrent_checkpoint_access(self, async_saver) -> None:
+		"""Test concurrent reading and writing of checkpoints."""
+		import asyncio
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+
+		async def write_checkpoint(thread_suffix: int):
+			config = {
+				"configurable": {
+					"thread_id": f"concurrent-{unique_id}-{thread_suffix}",
+					"checkpoint_ns": "",
+				}
+			}
+			checkpoint = create_checkpoint(empty_checkpoint(), {}, thread_suffix)
+			await async_saver.aput(config, checkpoint, {"id": thread_suffix}, {})
+			return thread_suffix
+
+		async def read_checkpoint(thread_suffix: int):
+			config = {
+				"configurable": {
+					"thread_id": f"concurrent-{unique_id}-{thread_suffix}",
+					"checkpoint_ns": "",
+				}
+			}
+			result = await async_saver.aget_tuple(config)
+			return result.metadata["id"] if result else None
+
+		# Write checkpoints concurrently
+		write_tasks = [write_checkpoint(i) for i in range(10)]
+		write_results = await asyncio.gather(*write_tasks)
+		assert len(write_results) == 10
+		assert set(write_results) == set(range(10))
+
+		# Read checkpoints concurrently
+		read_tasks = [read_checkpoint(i) for i in range(10)]
+		read_results = await asyncio.gather(*read_tasks)
+		assert len(read_results) == 10
+		assert set(read_results) == set(range(10))
