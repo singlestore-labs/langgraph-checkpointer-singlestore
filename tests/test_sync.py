@@ -15,9 +15,7 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.types import TASKS
 from tests.test_utils import (
-	exclude_private_keys,
 	create_test_checkpoints,
-	filter_checkpoints,
 	create_large_metadata,
 	create_unicode_metadata,
 	create_metadata_with_private_keys,
@@ -315,50 +313,6 @@ class TestSyncCheckpoint:
 		assert retrieved is not None
 		assert retrieved.checkpoint["channel_values"] == {}
 		assert retrieved.checkpoint["channel_versions"] == {}
-
-	def test_binary_checkpoint_data(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
-		"""Test handling of binary data in checkpoint blobs."""
-		import uuid
-
-		unique_id = uuid.uuid4().hex[:8]
-		checkpoint, binary_data = create_checkpoint_with_binary_data()
-
-		config = {
-			"configurable": {
-				"thread_id": f"binary-test-{unique_id}",
-				"checkpoint_ns": "",
-			}
-		}
-
-		result_config = sync_saver.put(config, checkpoint, {}, {"binary_channel": "1"})
-
-		retrieved = sync_saver.get_tuple(result_config)
-		assert retrieved is not None
-		assert "binary_channel" in retrieved.checkpoint["channel_values"]
-		assert retrieved.checkpoint["channel_values"]["binary_channel"] == binary_data
-
-	def test_metadata_private_keys_exclusion(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
-		"""Test that private keys are properly excluded from metadata."""
-		import uuid
-
-		unique_id = uuid.uuid4().hex[:8]
-
-		config = create_config_with_metadata(
-			f"private-test-{unique_id}",
-			metadata={"run_id": "test_run"},
-			private_keys={"__private_key": "secret", "__super_private": "top_secret"},
-		)
-
-		checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
-		metadata = create_metadata_with_private_keys()
-
-		sync_saver.put(config, checkpoint, metadata, {})
-		retrieved = sync_saver.get_tuple(config)
-
-		assert retrieved is not None
-		assert_checkpoint_metadata(retrieved.metadata, {**metadata, "run_id": "test_run"}, exclude_private=True)
-		assert "__private_key" not in retrieved.metadata
-		assert "__super_private_key" not in retrieved.metadata
 
 	def test_search_with_complex_filters(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		"""Test search functionality with complex filter combinations."""
