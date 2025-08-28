@@ -447,7 +447,6 @@ class TestHTTPSyncCheckpoint:
 class TestMetadataHandling:
 	"""Test metadata handling scenarios."""
 
-
 	def test_null_character_handling(
 		self,
 		saver: HTTPSingleStoreSaver,
