@@ -8,7 +8,9 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "httpx[http2]>=0.28.1",
     "langgraph-checkpoint>=2.1.1",
+    "pytest-httpx>=0.35.0",
     "singlestoredb>=1.15.0",
 ]
 
@@ -77,6 +79,8 @@ omit = [
 [dependency-groups]
 dev = [
     "pyrefly>=0.26.0",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
     "ruff>=0.12.7",
 ]
 
