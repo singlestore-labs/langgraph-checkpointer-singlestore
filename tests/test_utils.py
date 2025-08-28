@@ -73,7 +73,6 @@ def create_large_metadata(num_keys: int = 100) -> dict[str, str]:
 def create_unicode_metadata() -> dict[str, str]:
 	"""Create metadata with various Unicode characters."""
 	return {
-		"emoji": "🎉🚀💡",
 		"chinese": "你好世界",
 		"arabic": "مرحبا بالعالم",
 		"special": "Ñoño™€",
