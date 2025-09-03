@@ -201,13 +201,11 @@ class HTTPClient(BaseHTTPClient):
 	def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 		"""Execute GET request."""
 		response = self._request_with_retry("GET", path, params=params)
-		# print(f"\nGET {path} {params} {response.json()}")
 		return response.json()
 
 	def post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
 		"""Execute POST request."""
 		response = self._request_with_retry("POST", path, payload=json)
-		# print(f"\nPOST {path} {json} {response.json()}")
 		return response.json()
 
 	def put(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
@@ -218,7 +216,6 @@ class HTTPClient(BaseHTTPClient):
 	def delete(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 		"""Execute DELETE request."""
 		response = self._request_with_retry("DELETE", path, params=params)
-		# print(f"\nDELETE {path} {params} {response.json()}")
 		return response.json()
 
 
