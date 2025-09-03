@@ -26,6 +26,16 @@ install: deps
 tests:
 	uv run pytest
 
+test-http-live: ## Run HTTP tests with specific server URL
+	@echo "Usage: make test-http-live SERVER_URL=http://localhost:8080 BASE_PATH=/api/v1 API_KEY=your-key"
+	@if [ -z "$(SERVER_URL)" ]; then echo "ERROR: SERVER_URL is required"; exit 1; fi
+	uv run pytest tests/test_real_server.py \
+		--use-real-server \
+		--server-url="$(SERVER_URL)" \
+		$(if $(BASE_PATH),--base-path="$(BASE_PATH)") \
+		$(if $(API_KEY),--api-key="$(API_KEY)") \
+		-xvs
+
 uninstall:
 	uv pip uninstall .
 
