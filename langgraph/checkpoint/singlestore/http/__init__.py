@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+from pydantic import ValidationError
 
 from langgraph.checkpoint.base import (
 	WRITES_IDX_MAP,
@@ -23,12 +24,24 @@ from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.singlestore.base import BaseSingleStoreSaver
 
 from .client import HTTPClient, HTTPClientError, RetryConfig
-from .models import (
+from .constants import INVALID_REQUEST_PAYLOAD, INVALID_RESPONSE
+from .schemas import (
+	BlobData,
+	CheckpointData,
 	CheckpointListRequest,
+	CheckpointListResponse,
 	CheckpointRequest,
 	CheckpointResponse,
 	CheckpointWriteRequest,
+	SetupResponse,
+	ThreadDeleteResponse,
 	WriteData,
+)
+from .utils import (
+	encode_to_base64,
+	prepare_metadata_filter,
+	transform_channel_values,
+	transform_pending_writes,
 )
 
 
@@ -40,6 +53,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 	def __init__(
 		self,
 		base_url: str,
+		base_path: str = "",
 		api_key: str | None = None,
 		serde: SerializerProtocol | None = None,
 		timeout: float = 30.0,
@@ -51,6 +65,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 
 		Args:
 			base_url: Base URL of the checkpoint HTTP server
+			base_path: Base path to prepend to all endpoints
 			api_key: Optional API key for authentication
 			serde: Serializer for checkpoint data
 			timeout: Request timeout in seconds
@@ -60,6 +75,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		"""
 		super().__init__(serde=serde)
 		self.base_url = base_url
+		self.base_path = base_path
 		self.api_key = api_key
 		self.timeout = timeout
 		self.retry_config = retry_config
@@ -74,6 +90,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		if self._client is None:
 			client = HTTPClient(
 				base_url=self.base_url,
+				base_path=self.base_path,
 				api_key=self.api_key,
 				timeout=self.timeout,
 				retry_config=self.retry_config,
@@ -90,6 +107,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 	def from_url(
 		cls,
 		base_url: str,
+		base_path: str = "",
 		api_key: str | None = None,
 		**kwargs,
 	) -> Iterator[HTTPSingleStoreSaver]:
@@ -97,15 +115,17 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 
 		Args:
 			base_url: Base URL of the checkpoint HTTP server
+			base_path: Base path to prepend to all endpoints
 			api_key: Optional API key for authentication
 			**kwargs: Additional arguments for HTTPSingleStoreSaver
 
 		Yields:
 			HTTPSingleStoreSaver instance
 		"""
-		saver = cls(base_url=base_url, api_key=api_key, **kwargs)
+		saver = cls(base_url=base_url, base_path=base_path, api_key=api_key, **kwargs)
 		client = HTTPClient(
 			base_url=base_url,
+			base_path=base_path,
 			api_key=api_key,
 			timeout=kwargs.get("timeout", 30.0),
 			retry_config=kwargs.get("retry_config"),
@@ -122,9 +142,26 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 	def setup(self) -> None:
 		"""Set up the checkpoint database via HTTP API."""
 		with self.lock, self._get_client() as client:
-			response = client.post("/setup", {})
-			if not response.get("success"):
-				raise HTTPClientError(f"Setup failed: {response.get('message', 'Unknown error')}")
+			try:
+				response = client.post("/checkpoints/setup", {})
+
+				# Wrap response parsing to catch validation errors
+				try:
+					parsed = SetupResponse(**response)
+				except ValidationError as e:
+					raise HTTPClientError(
+						message="Invalid setup response from server",
+						error_code="INVALID_RESPONSE",
+						details={
+							"response": response,
+							"errors": e.errors(),
+						},
+					) from e
+
+				if not parsed.success:
+					raise HTTPClientError(f"Setup failed: {parsed.message}")
+			except HTTPClientError:
+				raise
 
 	def list(
 		self,
@@ -135,31 +172,71 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		limit: int | None = None,
 	) -> Iterator[CheckpointTuple]:
 		"""List checkpoints from the database via HTTP API."""
-		request_data: CheckpointListRequest = {}
+		# Build request data as dict for Pydantic model
+		request_dict = {}
 
 		if config:
-			request_data["thread_id"] = config["configurable"]["thread_id"]
+			request_dict["thread_id"] = config["configurable"]["thread_id"]
 			checkpoint_ns = config["configurable"].get("checkpoint_ns")
 			if checkpoint_ns is not None:
-				request_data["checkpoint_ns"] = checkpoint_ns
+				request_dict["checkpoint_ns"] = checkpoint_ns
 			if checkpoint_id := get_checkpoint_id(config):
-				request_data["checkpoint_id"] = checkpoint_id
+				request_dict["checkpoint_id"] = checkpoint_id
 
 		if filter:
-			request_data["metadata_filter"] = filter
+			request_dict["metadata_filter"] = prepare_metadata_filter(filter)
 
-		if before:
-			request_data["before_checkpoint_id"] = get_checkpoint_id(before)
+		if before and (before_id := get_checkpoint_id(before)):
+			request_dict["before_checkpoint_id"] = before_id
 
-		if limit:
-			request_data["limit"] = limit
+		if limit is not None:
+			request_dict["limit"] = limit
+
+		# Create Pydantic model and convert to dict for API call
+		try:
+			request_model = CheckpointListRequest(**request_dict)
+		except ValidationError as e:
+			# Validation failed - raise before any network operations
+			raise HTTPClientError(
+				message="Invalid request payload",
+				error_code=INVALID_REQUEST_PAYLOAD,
+				details={
+					"request_payload": request_dict,
+					"errors": e.errors(),
+				},
+			) from e
+		request_data = request_model.model_dump(exclude_none=True)
+
+		# JSON-serialize metadata_filter for query parameter if present
+		# This ensures proper encoding of booleans (true/false) and nested structures
+		if request_data.get("metadata_filter"):
+			import json
+
+			request_data["metadata_filter"] = json.dumps(request_data["metadata_filter"])
 
 		with self._get_client() as client:
-			response = client.get("/checkpoints", params=request_data)
-			checkpoints = response.get("checkpoints", [])
+			try:
+				response = client.get("/checkpoints", params=request_data)
 
-			for checkpoint_data in checkpoints:
-				yield self._checkpoint_response_to_tuple(checkpoint_data)
+				# Wrap response parsing to catch validation errors
+				try:
+					parsed = CheckpointListResponse(**response)
+				except ValidationError as e:
+					raise HTTPClientError(
+						message="Invalid response from server",
+						error_code=INVALID_RESPONSE,
+						details={
+							"response": response,
+							"errors": e.errors(),
+						},
+					) from e
+
+				checkpoints = [cp.model_dump() for cp in parsed.checkpoints]
+
+				for checkpoint_data in checkpoints:
+					yield self._checkpoint_response_to_tuple(checkpoint_data)
+			except HTTPClientError:
+				raise
 
 	def get(self, config: RunnableConfig) -> Checkpoint | None:
 		"""Get a checkpoint from the database via HTTP API."""
@@ -176,13 +253,33 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 			try:
 				if checkpoint_id:
 					# Get specific checkpoint
-					path = f"/checkpoints/{thread_id}/{checkpoint_ns}/{checkpoint_id}"
+					path = f"/checkpoints/{thread_id}/{checkpoint_id}"
 				else:
 					# Get latest checkpoint
-					path = f"/checkpoints/{thread_id}/{checkpoint_ns}/latest"
+					path = f"/checkpoints/{thread_id}/latest"
 
-				response = client.get(path)
-				return self._checkpoint_response_to_tuple(response)
+				# Add checkpoint_ns as query parameter if provided
+				params = {}
+				if checkpoint_ns:
+					params["checkpoint_ns"] = checkpoint_ns
+
+				response = client.get(path, params=params)
+
+				# Wrap response parsing to catch validation errors
+				try:
+					parsed = CheckpointResponse(**response)
+				except ValidationError as e:
+					raise HTTPClientError(
+						message="Invalid checkpoint response from server",
+						error_code=INVALID_RESPONSE,
+						details={
+							"response": response,
+							"errors": e.errors(),
+						},
+					) from e
+
+				response_dict = parsed.model_dump()
+				return self._checkpoint_response_to_tuple(response_dict)
 			except HTTPClientError as e:
 				if e.status_code == 404:
 					return None
@@ -224,23 +321,43 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 						"channel": channel,
 						"version": version,
 						"type": type_str,
-						"blob": self._encode_blob(blob) if blob else None,
+						"blob": encode_to_base64(blob) if blob is not None else None,
 					}
 				)
 
-		# Create request
-		request: CheckpointRequest = {
-			"thread_id": thread_id,
-			"checkpoint_ns": checkpoint_ns,
-			"checkpoint_id": checkpoint["id"],
-			"parent_checkpoint_id": parent_checkpoint_id,
-			"checkpoint": copy,
-			"metadata": get_checkpoint_metadata(config, metadata),
-			"blob_data": blob_data if blob_data else None,
-		}
+		# Create request using Pydantic model
+		checkpoint_data = CheckpointData(
+			v=copy.get("v", 1),
+			ts=copy["ts"],
+			id=copy["id"],
+			channel_values=copy.get("channel_values", {}),
+			channel_versions=copy.get("channel_versions", {}),
+			versions_seen=copy.get("versions_seen"),
+		)
+
+		# Create BlobData list if needed
+		blob_data_models = [BlobData(**bd) for bd in blob_data] if blob_data else None
+
+		request_model = CheckpointRequest(
+			thread_id=thread_id,
+			checkpoint_ns=checkpoint_ns,
+			checkpoint_id=checkpoint["id"],
+			parent_checkpoint_id=parent_checkpoint_id,
+			checkpoint=checkpoint_data,
+			metadata=get_checkpoint_metadata(config, metadata),
+			blob_data=blob_data_models,
+		)
+		request = request_model.model_dump(exclude_none=True)
 
 		with self.lock, self._get_client() as client:
-			client.put("/checkpoints", request)
+			try:
+				# Extract thread_id and checkpoint_id from request for URL
+				thread_id_str = request["thread_id"]
+				checkpoint_id_str = request["checkpoint_id"]
+				path = f"/checkpoints/{thread_id_str}/{checkpoint_id_str}"
+				client.put(path, request)
+			except HTTPClientError:
+				raise
 
 		return {
 			"configurable": {
@@ -262,74 +379,55 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		checkpoint_ns = config["configurable"]["checkpoint_ns"]
 		checkpoint_id = config["configurable"]["checkpoint_id"]
 
-		# Prepare write data
-		write_data: list[WriteData] = []
+		# Prepare write data using Pydantic models
+		write_data_models = []
 		for idx, (channel, value) in enumerate(writes):
 			type_str, blob = self.serde.dumps_typed(value)
-			write_data.append(
-				{
-					"idx": WRITES_IDX_MAP.get(channel, idx),
-					"channel": channel,
-					"type": type_str,
-					"blob": self._encode_blob(blob),
-				}
+			write_data_models.append(
+				WriteData(
+					idx=WRITES_IDX_MAP.get(channel, idx),
+					channel=channel,
+					type=type_str,
+					blob=encode_to_base64(blob),
+				)
 			)
 
-		request: CheckpointWriteRequest = {
-			"thread_id": thread_id,
-			"checkpoint_ns": checkpoint_ns,
-			"checkpoint_id": checkpoint_id,
-			"task_id": task_id,
-			"task_path": task_path,
-			"writes": write_data,
-		}
+		request_model = CheckpointWriteRequest(
+			thread_id=thread_id,
+			checkpoint_ns=checkpoint_ns,
+			checkpoint_id=checkpoint_id,
+			task_id=str(task_id),  # Ensure task_id is string
+			task_path=task_path,
+			writes=write_data_models,
+		)
+		request = request_model.model_dump()
 
 		with self.lock, self._get_client() as client:
-			client.put("/checkpoint-writes", request)
+			try:
+				# Extract thread_id and checkpoint_id from request for URL
+				thread_id_str = request["thread_id"]
+				checkpoint_id_str = request["checkpoint_id"]
+				path = f"/checkpoints/{thread_id_str}/{checkpoint_id_str}/writes"
+				client.put(path, request)
+			except HTTPClientError:
+				raise
 
 	def delete_thread(self, thread_id: str) -> None:
 		"""Delete all checkpoints and writes associated with a thread ID via HTTP API."""
 		with self.lock, self._get_client() as client:
-			client.delete(f"/threads/{thread_id}")
+			try:
+				response = client.delete(f"/checkpoints/{thread_id}")
+				parsed = ThreadDeleteResponse(**response)
+				if not parsed.success:
+					raise HTTPClientError("Delete thread failed")
+			except HTTPClientError:
+				raise
 
-	def _encode_blob(self, data: bytes) -> str:
-		"""Encode binary data to base64 string."""
-		import base64
-
-		return base64.b64encode(data).decode("utf-8")
-
-	def _decode_blob(self, data: str) -> bytes:
-		"""Decode base64 string to binary data."""
-		import base64
-
-		return base64.b64decode(data)
-
-	def _checkpoint_response_to_tuple(self, response: CheckpointResponse) -> CheckpointTuple:
+	def _checkpoint_response_to_tuple(self, response: dict[str, Any]) -> CheckpointTuple:
 		"""Convert API response to CheckpointTuple."""
-		# Parse channel values from response
-		channel_values_parsed = []
-		if response.get("channel_values"):
-			for item in response["channel_values"]:
-				channel_values_parsed.append(
-					(
-						item[0].encode("utf-8"),  # channel
-						item[1].encode("utf-8"),  # type
-						self._decode_blob(item[2]) if item[2] else b"",  # blob
-					)
-				)
-
-		# Parse pending writes from response
-		pending_writes_parsed = []
-		if response.get("pending_writes"):
-			for item in response["pending_writes"]:
-				pending_writes_parsed.append(
-					(
-						item[0].encode("utf-8"),  # task_id
-						item[1].encode("utf-8"),  # channel
-						item[2].encode("utf-8"),  # type
-						self._decode_blob(item[3]) if item[3] else b"",  # blob
-					)
-				)
+		# Use utility functions to transform the data
+		channel_values_parsed = transform_channel_values(response.get("channel_values"))
+		pending_writes_parsed = transform_pending_writes(response.get("pending_writes"))
 
 		# Build checkpoint tuple
 		checkpoint_data = response["checkpoint"]
@@ -367,4 +465,11 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		)
 
 
-__all__ = ["HTTPClient", "HTTPClientError", "HTTPSingleStoreSaver", "RetryConfig"]
+__all__ = [
+	"INVALID_REQUEST_PAYLOAD",
+	"INVALID_RESPONSE",
+	"HTTPClient",
+	"HTTPClientError",
+	"HTTPSingleStoreSaver",
+	"RetryConfig",
+]
