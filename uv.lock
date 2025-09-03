@@ -348,6 +348,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["http2"] },
     { name = "langgraph-checkpoint" },
+    { name = "pydantic" },
     { name = "pytest-httpx" },
     { name = "singlestoredb" },
 ]
@@ -381,6 +382,7 @@ dev = [
 requires-dist = [
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1" },
     { name = "langgraph-checkpoint", specifier = ">=2.1.1" },
+    { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },

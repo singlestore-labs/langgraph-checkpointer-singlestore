@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx[http2]>=0.28.1",
     "langgraph-checkpoint>=2.1.1",
+    "pydantic>=2.11.7",
     "pytest-httpx>=0.35.0",
     "singlestoredb>=1.15.0",
 ]
@@ -60,6 +61,7 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",
+    "no_db: mark test to skip database setup and connections",
 ]
 filterwarnings = [
     "error",
