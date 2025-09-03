@@ -11,15 +11,22 @@ from typing import Any
 
 import httpx
 
-from .models import ErrorResponse
+from .schemas import ErrorResponse
 
 
 class HTTPClientError(Exception):
 	"""Base exception for HTTP client errors."""
 
-	def __init__(self, message: str, status_code: int | None = None, details: dict[str, Any] | None = None):
+	def __init__(
+		self,
+		message: str,
+		status_code: int | None = None,
+		error_code: str | None = None,
+		details: dict[str, Any] | None = None,
+	):
 		super().__init__(message)
 		self.status_code = status_code
+		self.error_code = error_code
 		self.details = details
 
 
@@ -43,12 +50,14 @@ class BaseHTTPClient:
 	def __init__(
 		self,
 		base_url: str,
+		base_path: str = "",
 		api_key: str | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
 		headers: dict[str, str] | None = None,
 	):
 		self.base_url = base_url.rstrip("/")
+		self.base_path = base_path
 		self.api_key = api_key
 		self.timeout = httpx.Timeout(timeout=timeout, connect=10.0, pool=5.0)
 		self.retry_config = retry_config or RetryConfig()
@@ -90,11 +99,12 @@ class BaseHTTPClient:
 		"""Handle HTTP error responses."""
 		if response.status_code >= 400:
 			try:
-				error_data: ErrorResponse = response.json()
+				error_data = ErrorResponse.model_validate(response.json())
 				raise HTTPClientError(
-					message=error_data.get("message", f"HTTP {response.status_code}"),
+					message=error_data.error.message,
+					details=error_data.error.details,
+					error_code=error_data.error.code,
 					status_code=response.status_code,
-					details=error_data.get("details"),
 				)
 			except (ValueError, KeyError) as err:
 				raise HTTPClientError(
@@ -109,6 +119,7 @@ class HTTPClient(BaseHTTPClient):
 	def __init__(
 		self,
 		base_url: str,
+		base_path: str = "",
 		api_key: str | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
@@ -116,7 +127,7 @@ class HTTPClient(BaseHTTPClient):
 		pool_connections: int = 10,
 		pool_maxsize: int = 20,
 	):
-		super().__init__(base_url, api_key, timeout, retry_config, headers)
+		super().__init__(base_url, base_path, api_key, timeout, retry_config, headers)
 
 		# Configure connection pooling
 		self.limits = httpx.Limits(
@@ -149,14 +160,14 @@ class HTTPClient(BaseHTTPClient):
 		self,
 		method: str,
 		path: str,
-		json: dict[str, Any] | None = None,
+		payload: dict[str, Any] | None = None,
 		params: dict[str, Any] | None = None,
 	) -> httpx.Response:
 		"""Execute HTTP request with retry logic."""
 		if not self.client:
 			raise RuntimeError("Client not initialized. Use 'with HTTPClient.create()' context manager.")
 
-		url = f"{self.base_url}{path}"
+		url = f"{self.base_url}{self.base_path}{path}"
 		last_error: Exception | None = None
 
 		for attempt in range(self.retry_config.max_retries + 1):
@@ -164,7 +175,7 @@ class HTTPClient(BaseHTTPClient):
 				response = self.client.request(
 					method=method,
 					url=url,
-					json=json,
+					json=payload,
 					params=params,
 				)
 
@@ -190,21 +201,24 @@ class HTTPClient(BaseHTTPClient):
 	def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 		"""Execute GET request."""
 		response = self._request_with_retry("GET", path, params=params)
+		# print(f"\nGET {path} {params} {response.json()}")
 		return response.json()
 
 	def post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
 		"""Execute POST request."""
-		response = self._request_with_retry("POST", path, json=json)
+		response = self._request_with_retry("POST", path, payload=json)
+		# print(f"\nPOST {path} {json} {response.json()}")
 		return response.json()
 
 	def put(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
 		"""Execute PUT request."""
-		response = self._request_with_retry("PUT", path, json=json)
+		response = self._request_with_retry("PUT", path, payload=json)
 		return response.json()
 
 	def delete(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 		"""Execute DELETE request."""
 		response = self._request_with_retry("DELETE", path, params=params)
+		# print(f"\nDELETE {path} {params} {response.json()}")
 		return response.json()
 
 
@@ -214,6 +228,7 @@ class AsyncHTTPClient(BaseHTTPClient):
 	def __init__(
 		self,
 		base_url: str,
+		base_path: str = "",
 		api_key: str | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
@@ -221,7 +236,7 @@ class AsyncHTTPClient(BaseHTTPClient):
 		max_connections: int = 100,
 		max_keepalive_connections: int = 20,
 	):
-		super().__init__(base_url, api_key, timeout, retry_config, headers)
+		super().__init__(base_url, base_path, api_key, timeout, retry_config, headers)
 
 		# Configure connection pooling
 		self.limits = httpx.Limits(
@@ -261,7 +276,7 @@ class AsyncHTTPClient(BaseHTTPClient):
 		if not self.client:
 			raise RuntimeError("Client not initialized. Use 'async with AsyncHTTPClient.create()' context manager.")
 
-		url = f"{self.base_url}{path}"
+		url = f"{self.base_url}{self.base_path}{path}"
 		last_error: Exception | None = None
 
 		for attempt in range(self.retry_config.max_retries + 1):
