@@ -84,10 +84,18 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		self.lock = asyncio.Lock()
 		self.loop = asyncio.get_running_loop()
 		self._client: AsyncHTTPClient | None = None
+		self._client_context = None
+		self._http_client = None
 
-	@asynccontextmanager
-	async def _get_client(self) -> AsyncIterator[AsyncHTTPClient]:
-		"""Get or create async HTTP client."""
+	async def open(self) -> AsyncHTTPSingleStoreSaver:
+		"""Open the async HTTP client connection.
+
+		Creates and stores the HTTP client for connection pooling.
+		Can be called multiple times safely.
+
+		Returns:
+			Self for method chaining
+		"""
 		if self._client is None:
 			client = AsyncHTTPClient(
 				base_url=self.base_url,
@@ -98,10 +106,44 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 				max_connections=self.max_connections,
 				max_keepalive_connections=self.max_keepalive_connections,
 			)
-			async with client.create() as http_client:
-				yield http_client
-		else:
-			yield self._client
+			# Create the actual httpx async client
+			self._client_context = client.create()
+			self._http_client = await self._client_context.__aenter__()
+			self._client = self._http_client
+		return self
+
+	async def close(self) -> None:
+		"""Close the async HTTP client connection.
+
+		Cleans up the HTTP client and connection pool.
+		"""
+		if self._client is not None:
+			if hasattr(self, "_client_context") and self._client_context:
+				try:
+					await self._client_context.__aexit__(None, None, None)
+				except Exception:
+					pass  # Ignore cleanup errors
+			self._client = None
+			self._client_context = None
+			self._http_client = None
+
+	async def __aenter__(self) -> AsyncHTTPSingleStoreSaver:
+		"""Enter async context manager."""
+		return await self.open()
+
+	async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+		"""Exit async context manager."""
+		await self.close()
+
+	@asynccontextmanager
+	async def _get_client(self) -> AsyncIterator[AsyncHTTPClient]:
+		"""Get or create async HTTP client.
+
+		Lazily creates and caches the client on first use.
+		"""
+		if self._client is None:
+			await self.open()
+		yield self._client
 
 	@classmethod
 	@asynccontextmanager
@@ -124,21 +166,11 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			AsyncHTTPSingleStoreSaver instance
 		"""
 		saver = cls(base_url=base_url, base_path=base_path, api_key=api_key, **kwargs)
-		client = AsyncHTTPClient(
-			base_url=base_url,
-			base_path=base_path,
-			api_key=api_key,
-			timeout=kwargs.get("timeout", 30.0),
-			retry_config=kwargs.get("retry_config"),
-			max_connections=kwargs.get("max_connections", 100),
-			max_keepalive_connections=kwargs.get("max_keepalive_connections", 20),
-		)
-		async with client.create() as http_client:
-			saver._client = http_client
-			try:
-				yield saver
-			finally:
-				saver._client = None
+		try:
+			await saver.open()
+			yield saver
+		finally:
+			await saver.close()
 
 	async def setup(self) -> None:
 		"""Set up the checkpoint database via HTTP API."""
