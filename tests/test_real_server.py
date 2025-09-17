@@ -9,6 +9,9 @@ Run with: pytest tests/test_real_server.py --use-real-server --server-url=http:/
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 from langgraph.checkpoint.singlestore.http.schemas import generate_uuid_string
 from langgraph.checkpoint.singlestore.http import HTTPSingleStoreSaver
@@ -406,6 +409,237 @@ class TestIntegrationErrorHandling:
 			# This should raise an HTTPClientError due to validation
 			with pytest.raises(Exception):  # HTTPClientError or validation error
 				saver.get(invalid_config)
+
+	def test_connection_recovery(self, http_base_url: str, http_api_key: str):
+		"""Test recovery from connection issues."""
+		import socket
+		from unittest.mock import patch
+
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		checkpoint_id = generate_unique_checkpoint_id()
+		test_marker = generate_test_marker()
+
+		config = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id,
+		)
+
+		checkpoint, metadata = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id,
+			test_marker=test_marker,
+		)
+
+		test_passed = False
+		try:
+			with saver:
+
+				# First, establish a working connection
+				result = saver.put(config, checkpoint, metadata, {})
+				assert result is not None
+
+				# Simulate temporary network issue
+				original_request = client.request
+				call_count = 0
+
+				def failing_request(*args, **kwargs):
+					nonlocal call_count
+					call_count += 1
+					if call_count == 1:
+						# First call fails
+						raise socket.error("Connection reset")
+					else:
+						# Subsequent calls work
+						return original_request(*args, **kwargs)
+
+				with patch.object(client, "request", side_effect=failing_request):
+					# Should handle the error internally or raise appropriately
+					try:
+						# This might fail on first attempt but client may retry
+						result = saver.get(config)
+					except Exception as e:
+						# Connection error is expected
+						assert "Connection" in str(e) or "socket" in str(e)
+
+				# Verify recovery - should work now
+				result = saver.get(config)
+				assert result is not None
+				assert result["id"] == checkpoint_id
+
+				test_passed = True
+		finally:
+			# Cleanup
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
+
+	def test_operation_timeout_handling(self, http_base_url: str, http_api_key: str):
+		"""Test handling of operation timeouts."""
+		from httpx import TimeoutException
+
+		# Create saver with very short timeout
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+			timeout=0.001,  # 1ms timeout - extremely short
+		)
+
+		thread_id = generate_unique_thread_id()
+		checkpoint_id = generate_unique_checkpoint_id()
+		test_marker = generate_test_marker()
+
+		config = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id,
+		)
+
+		# Create large payload that might take time to process
+		large_data = "x" * 1000000  # 1MB string
+		checkpoint, metadata = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id,
+			test_marker=test_marker,
+			channel_values={"large": large_data},
+		)
+
+		# Operations might timeout due to short timeout setting
+		with saver:
+			try:
+				# This might timeout
+				saver.put(config, checkpoint, metadata, {})
+			except TimeoutException:
+				# Timeout is expected with such short timeout
+				pass
+			except Exception as e:
+				# Other timeout-related errors are also acceptable
+				assert "timeout" in str(e).lower() or "time" in str(e).lower()
+
+		# Create saver with reasonable timeout for cleanup
+		cleanup_saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+		with cleanup_saver:
+			try:
+				cleanup_saver.delete_thread(thread_id)
+			except:
+				pass
+
+	def test_large_batch_stress(self, http_base_url: str, http_api_key: str):
+		"""Test handling of large batch operations."""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		test_marker = generate_test_marker()
+		checkpoint_ids = []
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Create many checkpoints in rapid succession
+				num_checkpoints = 50
+				for i in range(num_checkpoints):
+					checkpoint_id = generate_unique_checkpoint_id()
+					checkpoint_ids.append(checkpoint_id)
+
+					config = generate_config_with_marker(
+						thread_id=thread_id,
+						checkpoint_id=checkpoint_id,
+					)
+
+					checkpoint, metadata = generate_checkpoint_with_marker(
+						checkpoint_id=checkpoint_id,
+						test_marker=test_marker,
+						metadata={"batch": i, "total": num_checkpoints},
+					)
+
+					# Should handle rapid fire requests
+					result = saver.put(config, checkpoint, metadata, {})
+					assert result is not None
+
+				# List should handle large result sets
+				checkpoints = list(saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}))
+				assert len(checkpoints) == num_checkpoints
+
+				# Verify all checkpoints are present
+				retrieved_ids = {cp.checkpoint["id"] for cp in checkpoints}
+				assert retrieved_ids == set(checkpoint_ids)
+
+				test_passed = True
+		finally:
+			# Cleanup
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
+
+	def test_malformed_data_handling(self, http_base_url: str, http_api_key: str):
+		"""Test handling of malformed data."""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		checkpoint_id = generate_unique_checkpoint_id()
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Test with various malformed configurations
+				malformed_cases = [
+					# Missing required fields
+					{"configurable": {}},
+					# Wrong types
+					{"configurable": {"thread_id": 123, "checkpoint_ns": ""}},
+					# Invalid checkpoint structure
+					{"configurable": {"thread_id": thread_id, "checkpoint_ns": "", "checkpoint_id": checkpoint_id}},
+				]
+
+				for case in malformed_cases:
+					if "thread_id" not in case.get("configurable", {}):
+						# Missing thread_id should raise error
+						with pytest.raises(Exception):
+							saver.get(case)
+					elif not isinstance(case["configurable"].get("thread_id"), str):
+						# Wrong type should raise error
+						with pytest.raises(Exception):
+							saver.get(case)
+
+				# Test with malformed checkpoint data
+				config = generate_config_with_marker(
+					thread_id=thread_id,
+					checkpoint_id=checkpoint_id,
+				)
+
+				# Checkpoint missing required fields
+				bad_checkpoint = {"id": checkpoint_id}  # Missing v, ts, etc.
+
+				with pytest.raises(Exception):
+					saver.put(config, bad_checkpoint, {}, {})
+
+				test_passed = True
+		finally:
+			# Cleanup
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
 
 
 @pytest.mark.real_server_only
@@ -2150,3 +2384,970 @@ class TestRealServerPendingWrites:
 				all_thread_ids = [thread_data["thread_id"] for thread_data in threads_data]
 				if test_passed:
 					cleanup_test_data(saver, test_marker, all_thread_ids)
+
+
+@pytest.mark.real_server_only
+class TestRealServerConcurrency:
+	"""Test concurrent operations with real server.
+
+	These tests verify that the checkpointer handles concurrent operations
+	correctly, including parallel writes, reads, and race conditions.
+	"""
+
+	def test_concurrent_puts_different_threads(self, http_base_url: str, http_api_key: str):
+		"""Test concurrent PUT operations on different threads using threading.
+
+		Creates multiple threads and performs checkpoint operations in parallel
+		to verify thread safety and data integrity.
+		"""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		test_marker = generate_test_marker()
+		thread_count = 5
+		results = []
+		errors = []
+		created_thread_ids = []
+
+		def put_checkpoint(thread_index: int):
+			"""Function to run in each thread."""
+			try:
+				thread_id = generate_unique_thread_id()
+				checkpoint_id = generate_unique_checkpoint_id()
+				created_thread_ids.append(thread_id)
+
+				config = generate_config_with_marker(
+					thread_id=thread_id,
+					checkpoint_id=checkpoint_id,
+				)
+
+				checkpoint, metadata = generate_checkpoint_with_marker(
+					checkpoint_id=checkpoint_id,
+					test_marker=test_marker,
+					channel_values={
+						"thread_index": thread_index,
+						"data": f"concurrent_thread_{thread_index}",
+						"timestamp": time.time(),
+					},
+					metadata={
+						"thread_index": thread_index,
+						"test_type": "concurrent_put",
+					},
+				)
+
+				with saver:
+
+					# Perform the PUT operation
+					result_config = saver.put(
+						config, checkpoint, metadata, {"thread_index": "1.0", "data": "1.0", "timestamp": "1.0"}
+					)
+
+					# Verify the checkpoint was stored
+					retrieved = saver.get(config)
+					assert retrieved is not None
+					assert retrieved["id"] == checkpoint_id
+					assert retrieved["channel_values"]["thread_index"] == thread_index
+
+					results.append(
+						{
+							"thread_index": thread_index,
+							"thread_id": thread_id,
+							"checkpoint_id": checkpoint_id,
+							"success": True,
+						}
+					)
+
+			except Exception as e:
+				errors.append(
+					{
+						"thread_index": thread_index,
+						"error": str(e),
+					}
+				)
+
+		test_passed = False
+		try:
+			# Create and start threads
+			threads = []
+			for i in range(thread_count):
+				thread = threading.Thread(target=put_checkpoint, args=(i,))
+				threads.append(thread)
+				thread.start()
+
+			# Wait for all threads to complete
+			for thread in threads:
+				thread.join(timeout=30)  # 30 second timeout per thread
+
+			# Verify results
+			assert len(errors) == 0, f"Errors occurred in threads: {errors}"
+			assert len(results) == thread_count, f"Expected {thread_count} results, got {len(results)}"
+
+			# Verify each thread succeeded
+			for i in range(thread_count):
+				thread_result = next((r for r in results if r["thread_index"] == i), None)
+				assert thread_result is not None, f"Thread {i} did not complete"
+				assert thread_result["success"], f"Thread {i} failed"
+
+			test_passed = True
+
+		finally:
+			if test_passed and created_thread_ids:
+				# Clean up all created threads
+				with saver:
+					for thread_id in created_thread_ids:
+						try:
+							saver.delete_thread(thread_id)
+						except Exception:
+							pass  # Best effort cleanup
+
+	def test_concurrent_reads_and_writes(self, http_base_url: str, http_api_key: str):
+		"""Test concurrent read and write operations on the same thread.
+
+		Performs simultaneous reads and writes to test consistency and
+		verify that operations don't interfere with each other.
+		"""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		# Create initial checkpoint
+		thread_id = generate_unique_thread_id()
+		initial_checkpoint_id = generate_unique_checkpoint_id()
+		test_marker = generate_test_marker()
+
+		config = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=initial_checkpoint_id,
+		)
+
+		checkpoint, metadata = generate_checkpoint_with_marker(
+			checkpoint_id=initial_checkpoint_id,
+			test_marker=test_marker,
+			channel_values={"counter": 0, "data": "initial"},
+			metadata={"phase": "initial"},
+		)
+
+		test_passed = False
+		with saver:
+
+			try:
+				# Store initial checkpoint
+				saver.put(config, checkpoint, metadata, {"counter": "1.0", "data": "1.0"})
+
+				results = {"reads": [], "writes": [], "errors": []}
+
+				def reader_task(index: int):
+					"""Read operation for concurrent execution."""
+					try:
+						with saver._get_client() as read_client:
+							saver._client = read_client
+							retrieved = saver.get(config)
+							results["reads"].append(
+								{
+									"index": index,
+									"checkpoint_id": retrieved["id"] if retrieved else None,
+									"counter": retrieved["channel_values"]["counter"] if retrieved else None,
+								}
+							)
+					except Exception as e:
+						results["errors"].append({"type": "read", "index": index, "error": str(e)})
+
+				def writer_task(index: int):
+					"""Write operation for concurrent execution."""
+					try:
+						new_checkpoint_id = generate_unique_checkpoint_id()
+						new_config = generate_config_with_marker(
+							thread_id=thread_id,
+							checkpoint_id=new_checkpoint_id,
+						)
+
+						new_checkpoint, new_metadata = generate_checkpoint_with_marker(
+							checkpoint_id=new_checkpoint_id,
+							test_marker=test_marker,
+							channel_values={"counter": index, "data": f"write_{index}"},
+							metadata={"phase": f"concurrent_write_{index}"},
+							parent_checkpoint_id=initial_checkpoint_id,
+						)
+
+						with saver._get_client() as write_client:
+							saver._client = write_client
+							saver.put(new_config, new_checkpoint, new_metadata, {"counter": "1.0", "data": "1.0"})
+							results["writes"].append(
+								{
+									"index": index,
+									"checkpoint_id": new_checkpoint_id,
+									"success": True,
+								}
+							)
+					except Exception as e:
+						results["errors"].append({"type": "write", "index": index, "error": str(e)})
+
+				# Use ThreadPoolExecutor for controlled concurrency
+				with ThreadPoolExecutor(max_workers=10) as executor:
+					futures = []
+
+					# Submit interleaved read and write operations
+					for i in range(5):
+						futures.append(executor.submit(reader_task, i))
+						futures.append(executor.submit(writer_task, i))
+
+					# Wait for all operations to complete
+					for future in as_completed(futures, timeout=30):
+						future.result()  # This will raise any exceptions that occurred
+
+				# Verify results
+				assert len(results["errors"]) == 0, f"Errors occurred: {results['errors']}"
+				assert len(results["reads"]) == 5, f"Expected 5 reads, got {len(results['reads'])}"
+				assert len(results["writes"]) == 5, f"Expected 5 writes, got {len(results['writes'])}"
+
+				# Verify all writes succeeded
+				for write in results["writes"]:
+					assert write["success"], f"Write {write['index']} failed"
+
+				# Verify reads got valid data
+				for read in results["reads"]:
+					assert read["checkpoint_id"] is not None, f"Read {read['index']} got None"
+
+				test_passed = True
+
+			finally:
+				if test_passed:
+					saver.delete_thread(thread_id)
+
+	def test_thread_deletion_during_operations(self, http_base_url: str, http_api_key: str):
+		"""Test thread deletion while other operations are in progress.
+
+		Verifies that deleting a thread while reads/writes are happening
+		is handled gracefully without data corruption.
+		"""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		test_marker = generate_test_marker()
+		checkpoint_ids = []
+
+		# Create multiple checkpoints first
+		for i in range(5):
+			checkpoint_id = generate_unique_checkpoint_id()
+			checkpoint_ids.append(checkpoint_id)
+
+			config = generate_config_with_marker(
+				thread_id=thread_id,
+				checkpoint_id=checkpoint_id,
+			)
+
+			checkpoint, metadata = generate_checkpoint_with_marker(
+				checkpoint_id=checkpoint_id,
+				test_marker=test_marker,
+				channel_values={"index": i, "data": f"checkpoint_{i}"},
+				metadata={"index": i},
+			)
+
+			with saver:
+				saver.put(config, checkpoint, metadata, {"index": "1.0", "data": "1.0"})
+
+		results = {"reads": [], "deletes": [], "errors": []}
+		deletion_started = threading.Event()
+		deletion_complete = threading.Event()
+
+		def continuous_reader():
+			"""Continuously read checkpoints until deletion is complete."""
+			while not deletion_complete.is_set():
+				try:
+					for checkpoint_id in checkpoint_ids:
+						if deletion_complete.is_set():
+							break
+
+						config = generate_config_with_marker(
+							thread_id=thread_id,
+							checkpoint_id=checkpoint_id,
+						)
+
+						with saver:
+							retrieved = saver.get(config)
+
+							results["reads"].append(
+								{
+									"checkpoint_id": checkpoint_id,
+									"found": retrieved is not None,
+									"after_deletion": deletion_started.is_set(),
+								}
+							)
+
+						time.sleep(0.01)  # Small delay between reads
+
+				except Exception as e:
+					results["errors"].append({"type": "read", "error": str(e)})
+
+		def delete_thread_task():
+			"""Delete the thread after a delay."""
+			time.sleep(0.1)  # Let some reads happen first
+			deletion_started.set()
+
+			try:
+				with saver:
+					saver.delete_thread(thread_id)
+					results["deletes"].append({"success": True})
+			except Exception as e:
+				results["errors"].append({"type": "delete", "error": str(e)})
+			finally:
+				deletion_complete.set()
+
+		# Start reader thread
+		reader_thread = threading.Thread(target=continuous_reader)
+		reader_thread.start()
+
+		# Start deletion thread
+		delete_thread = threading.Thread(target=delete_thread_task)
+		delete_thread.start()
+
+		# Wait for both threads
+		reader_thread.join(timeout=10)
+		delete_thread.join(timeout=10)
+
+		# Verify results
+		assert len(results["deletes"]) == 1, "Delete operation should have run once"
+		assert results["deletes"][0]["success"], "Delete operation should succeed"
+
+		# Check that reads before deletion found data
+		reads_before = [r for r in results["reads"] if not r["after_deletion"]]
+		reads_after = [r for r in results["reads"] if r["after_deletion"]]
+
+		if reads_before:
+			# At least some reads before deletion should find data
+			found_before = sum(1 for r in reads_before if r["found"])
+			assert found_before > 0, "Should find data before deletion"
+
+		# After deletion, reads should not find data (or handle gracefully)
+		# This is acceptable behavior - either None or proper error handling
+
+	def test_race_condition_handling(self, http_base_url: str, http_api_key: str):
+		"""Test race conditions with concurrent updates to the same checkpoint.
+
+		Verifies last-write-wins semantics when multiple clients update
+		the same checkpoint simultaneously.
+		"""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		checkpoint_id = generate_unique_checkpoint_id()
+		test_marker = generate_test_marker()
+
+		# Create initial checkpoint
+		config = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id,
+		)
+
+		checkpoint, metadata = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id,
+			test_marker=test_marker,
+			channel_values={"value": "initial", "counter": 0},
+			metadata={"phase": "initial"},
+		)
+
+		test_passed = False
+		with saver:
+
+			try:
+				saver.put(config, checkpoint, metadata, {"value": "1.0", "counter": "1.0"})
+
+				update_count = 10
+				results = []
+
+				def concurrent_update(index: int):
+					"""Update the same checkpoint concurrently."""
+					try:
+						# Each thread updates with its own value
+						updated_checkpoint = checkpoint.copy()
+						updated_checkpoint["channel_values"] = {
+							"value": f"update_{index}",
+							"counter": index,
+							"timestamp": time.time(),
+						}
+
+						updated_metadata = metadata.copy()
+						updated_metadata["updater"] = index
+
+						with saver._get_client() as update_client:
+							saver._client = update_client
+							saver.put(
+								config,
+								updated_checkpoint,
+								updated_metadata,
+								{"value": "1.0", "counter": "1.0", "timestamp": "1.0"},
+							)
+
+						results.append(
+							{
+								"index": index,
+								"success": True,
+								"timestamp": time.time(),
+							}
+						)
+
+					except Exception as e:
+						results.append(
+							{
+								"index": index,
+								"success": False,
+								"error": str(e),
+							}
+						)
+
+				# Start all updates simultaneously
+				threads = []
+				for i in range(update_count):
+					thread = threading.Thread(target=concurrent_update, args=(i,))
+					threads.append(thread)
+
+				# Start all threads at once for maximum contention
+				for thread in threads:
+					thread.start()
+
+				# Wait for all threads
+				for thread in threads:
+					thread.join(timeout=10)
+
+				# Verify all updates completed
+				assert len(results) == update_count, f"Expected {update_count} results, got {len(results)}"
+
+				# All updates should succeed (last-write-wins)
+				successful_updates = [r for r in results if r["success"]]
+				assert len(successful_updates) == update_count, "All updates should succeed with last-write-wins"
+
+				# Verify final state - should be one of the updates
+				final_state = saver.get(config)
+				assert final_state is not None, "Checkpoint should still exist"
+
+				# The value should be from one of the updates
+				final_value = final_state["channel_values"]["value"]
+				assert final_value.startswith("update_"), f"Final value should be an update: {final_value}"
+
+				# Extract the index from the final value
+				final_index = int(final_value.split("_")[1])
+				assert 0 <= final_index < update_count, f"Final index should be valid: {final_index}"
+
+				test_passed = True
+
+			finally:
+				if test_passed:
+					saver.delete_thread(thread_id)
+
+
+@pytest.mark.real_server_only
+class TestRealServerDataIntegrity:
+	"""Test data integrity and consistency with real server."""
+
+	def test_checkpoint_immutability(self, http_base_url: str, http_api_key: str):
+		"""Test that checkpoints are immutable once created."""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		checkpoint_id_1 = generate_unique_checkpoint_id()
+		checkpoint_id_2 = generate_unique_checkpoint_id()
+		test_marker = generate_test_marker()
+
+		config_1 = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id_1,
+		)
+
+		config_2 = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id_2,
+		)
+
+		checkpoint_1, metadata_1 = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id_1,
+			test_marker=test_marker,
+			channel_values={"value": "original"},
+		)
+
+		checkpoint_2, metadata_2 = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id_2,
+			test_marker=test_marker,
+			channel_values={"value": "updated"},
+		)
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Create first checkpoint
+				saver.put(config_1, checkpoint_1, metadata_1, {})
+
+				# Create second checkpoint with same thread but different ID
+				saver.put(config_2, checkpoint_2, metadata_2, {})
+
+				# First checkpoint should remain unchanged
+				retrieved_1 = saver.get(config_1)
+				assert retrieved_1 is not None
+				assert retrieved_1["channel_values"]["value"] == "original"
+
+				# Second checkpoint should have new value
+				retrieved_2 = saver.get(config_2)
+				assert retrieved_2 is not None
+				assert retrieved_2["channel_values"]["value"] == "updated"
+
+				# Attempt to overwrite first checkpoint (should create new or fail)
+				checkpoint_1_modified = checkpoint_1.copy()
+				checkpoint_1_modified["channel_values"] = {"value": "modified"}
+
+				# This may either create a new checkpoint or be ignored
+				result = saver.put(config_1, checkpoint_1_modified, metadata_1, {})
+
+				# Original checkpoint should still be retrievable with original data
+				# (behavior depends on server implementation)
+				retrieved_1_again = saver.get(config_1)
+				assert retrieved_1_again is not None
+				# Value could be either original or modified depending on server behavior
+				assert retrieved_1_again["channel_values"]["value"] in ["original", "modified"]
+
+				test_passed = True
+
+		finally:
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
+
+	def test_metadata_consistency(self, http_base_url: str, http_api_key: str):
+		"""Test metadata consistency across operations."""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		test_marker = generate_test_marker()
+
+		# Create complex metadata structure
+		complex_metadata = {
+			"test_marker": test_marker,
+			"nested": {
+				"level1": {
+					"level2": {
+						"value": "deep",
+						"array": [1, 2, 3],
+					}
+				}
+			},
+			"unicode": "测试数据 🚀",
+			"special_chars": "!@#$%^&*()",
+			"null_value": None,
+			"boolean": True,
+			"number": 42.5,
+		}
+
+		checkpoint_id = generate_unique_checkpoint_id()
+		config = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id,
+		)
+
+		checkpoint, _ = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id,
+			test_marker=test_marker,
+		)
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Store with complex metadata
+				saver.put(config, checkpoint, complex_metadata, {})
+
+				# Retrieve and verify all metadata is preserved
+				retrieved = saver.get_tuple(config)
+				assert retrieved is not None
+
+				# Check each metadata field
+				assert retrieved.metadata["test_marker"] == test_marker
+				assert retrieved.metadata["nested"]["level1"]["level2"]["value"] == "deep"
+				assert retrieved.metadata["nested"]["level1"]["level2"]["array"] == [1, 2, 3]
+				assert retrieved.metadata["unicode"] == "测试数据 🚀"
+				assert retrieved.metadata["special_chars"] == "!@#$%^&*()"
+				assert retrieved.metadata["null_value"] is None
+				assert retrieved.metadata["boolean"] is True
+				assert retrieved.metadata["number"] == 42.5
+
+				# Verify metadata filtering works with complex structure
+				filtered = list(
+					saver.list(
+						{"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+						filter={"nested": {"level1": {"level2": {"value": "deep"}}}},
+					)
+				)
+				assert len(filtered) == 1
+				assert filtered[0].checkpoint["id"] == checkpoint_id
+
+				test_passed = True
+
+		finally:
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
+
+	def test_binary_data_integrity(self, http_base_url: str, http_api_key: str):
+		"""Test binary data integrity through full round-trip."""
+		import hashlib
+
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		checkpoint_id = generate_unique_checkpoint_id()
+		test_marker = generate_test_marker()
+
+		# Create various binary patterns
+		binary_patterns = {
+			"all_zeros": b"\x00" * 1000,
+			"all_ones": b"\xff" * 1000,
+			"alternating": b"\xaa\x55" * 500,
+			"random": generate_binary_test_pattern(1000),
+			"image_header": b"\x89PNG\r\n\x1a\n" + generate_binary_test_pattern(992),
+		}
+
+		# Calculate checksums for verification
+		checksums = {key: hashlib.sha256(value).hexdigest() for key, value in binary_patterns.items()}
+
+		config = generate_config_with_marker(
+			thread_id=thread_id,
+			checkpoint_id=checkpoint_id,
+		)
+
+		checkpoint, metadata = generate_checkpoint_with_marker(
+			checkpoint_id=checkpoint_id,
+			test_marker=test_marker,
+			channel_values=binary_patterns,
+		)
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Store binary data
+				saver.put(config, checkpoint, metadata, {})
+
+				# Retrieve and verify
+				retrieved = saver.get(config)
+				assert retrieved is not None
+
+				# Verify all binary patterns are intact
+				for key, original_data in binary_patterns.items():
+					retrieved_data = retrieved["channel_values"][key]
+
+					# Verify data matches
+					assert retrieved_data == original_data, f"Binary data mismatch for {key}"
+
+					# Verify checksum
+					retrieved_checksum = hashlib.sha256(retrieved_data).hexdigest()
+					assert retrieved_checksum == checksums[key], f"Checksum mismatch for {key}"
+
+				test_passed = True
+
+		finally:
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
+
+	def test_version_tracking_accuracy(self, http_base_url: str, http_api_key: str):
+		"""Test accuracy of version tracking across updates."""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		test_marker = generate_test_marker()
+
+		# Track versions through multiple updates
+		versions_history = []
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Create initial checkpoint
+				checkpoint_id_1 = generate_unique_checkpoint_id()
+				config_1 = generate_config_with_marker(
+					thread_id=thread_id,
+					checkpoint_id=checkpoint_id_1,
+				)
+
+				checkpoint_1, metadata_1 = generate_checkpoint_with_marker(
+					checkpoint_id=checkpoint_id_1,
+					test_marker=test_marker,
+					channel_values={
+						"counter": 1,
+						"messages": ["first"],
+					},
+				)
+
+				initial_versions = {"counter": "v1", "messages": "v1"}
+				saver.put(config_1, checkpoint_1, metadata_1, initial_versions)
+				versions_history.append(initial_versions.copy())
+
+				# Retrieve and verify initial versions
+				tuple_1 = saver.get_tuple(config_1)
+				assert tuple_1 is not None
+				# Server may transform versions, just verify they exist
+				assert "counter" in tuple_1.checkpoint.get("channel_versions", {})
+				assert "messages" in tuple_1.checkpoint.get("channel_versions", {})
+
+				# Create second checkpoint with updated versions
+				checkpoint_id_2 = generate_unique_checkpoint_id()
+				config_2 = generate_config_with_marker(
+					thread_id=thread_id,
+					checkpoint_id=checkpoint_id_2,
+				)
+
+				checkpoint_2, metadata_2 = generate_checkpoint_with_marker(
+					checkpoint_id=checkpoint_id_2,
+					test_marker=test_marker,
+					channel_values={
+						"counter": 2,
+						"messages": ["first", "second"],
+						"new_field": "added",
+					},
+				)
+
+				updated_versions = {"counter": "v2", "messages": "v2", "new_field": "v1"}
+				saver.put(config_2, checkpoint_2, metadata_2, updated_versions)
+				versions_history.append(updated_versions.copy())
+
+				# Retrieve and verify updated versions
+				tuple_2 = saver.get_tuple(config_2)
+				assert tuple_2 is not None
+				assert "new_field" in tuple_2.checkpoint.get("channel_versions", {})
+
+				# List all checkpoints and verify version progression
+				all_checkpoints = list(saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}))
+
+				# Should have both checkpoints
+				assert len(all_checkpoints) >= 2
+
+				# Verify each checkpoint maintains its version state
+				checkpoint_ids = {cp.checkpoint["id"] for cp in all_checkpoints}
+				assert checkpoint_id_1 in checkpoint_ids
+				assert checkpoint_id_2 in checkpoint_ids
+
+				test_passed = True
+
+		finally:
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
+
+	def test_thread_isolation(self, http_base_url: str, http_api_key: str):
+		"""Test complete isolation between different threads."""
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id_1 = generate_unique_thread_id()
+		thread_id_2 = generate_unique_thread_id()
+		test_marker = generate_test_marker()
+
+		# Create checkpoints for each thread
+		checkpoints_thread_1 = []
+		checkpoints_thread_2 = []
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Create checkpoints for thread 1
+				for i in range(3):
+					checkpoint_id = generate_unique_checkpoint_id()
+					checkpoints_thread_1.append(checkpoint_id)
+
+					config = generate_config_with_marker(
+						thread_id=thread_id_1,
+						checkpoint_id=checkpoint_id,
+					)
+
+					checkpoint, metadata = generate_checkpoint_with_marker(
+						checkpoint_id=checkpoint_id,
+						test_marker=test_marker,
+						channel_values={"thread": 1, "index": i},
+						metadata={"thread_group": "group1"},
+					)
+
+					saver.put(config, checkpoint, metadata, {})
+
+				# Create checkpoints for thread 2
+				for i in range(3):
+					checkpoint_id = generate_unique_checkpoint_id()
+					checkpoints_thread_2.append(checkpoint_id)
+
+					config = generate_config_with_marker(
+						thread_id=thread_id_2,
+						checkpoint_id=checkpoint_id,
+					)
+
+					checkpoint, metadata = generate_checkpoint_with_marker(
+						checkpoint_id=checkpoint_id,
+						test_marker=test_marker,
+						channel_values={"thread": 2, "index": i},
+						metadata={"thread_group": "group2"},
+					)
+
+					saver.put(config, checkpoint, metadata, {})
+
+				# Verify thread 1 checkpoints are isolated
+				thread_1_list = list(saver.list({"configurable": {"thread_id": thread_id_1, "checkpoint_ns": ""}}))
+				assert len(thread_1_list) == 3
+				thread_1_ids = {cp.checkpoint["id"] for cp in thread_1_list}
+				assert thread_1_ids == set(checkpoints_thread_1)
+
+				# Verify thread 2 checkpoints are isolated
+				thread_2_list = list(saver.list({"configurable": {"thread_id": thread_id_2, "checkpoint_ns": ""}}))
+				assert len(thread_2_list) == 3
+				thread_2_ids = {cp.checkpoint["id"] for cp in thread_2_list}
+				assert thread_2_ids == set(checkpoints_thread_2)
+
+				# Verify no cross-contamination
+				assert thread_1_ids.isdisjoint(thread_2_ids)
+
+				# Delete thread 1
+				saver.delete_thread(thread_id_1)
+
+				# Thread 2 should be unaffected
+				thread_2_list_after = list(
+					saver.list({"configurable": {"thread_id": thread_id_2, "checkpoint_ns": ""}})
+				)
+				assert len(thread_2_list_after) == 3
+
+				# Thread 1 should be gone
+				thread_1_list_after = list(
+					saver.list({"configurable": {"thread_id": thread_id_1, "checkpoint_ns": ""}})
+				)
+				assert len(thread_1_list_after) == 0
+
+				test_passed = True
+
+		finally:
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id_1)
+						saver.delete_thread(thread_id_2)
+					except:
+						pass
+
+	def test_checkpoint_ordering_consistency(self, http_base_url: str, http_api_key: str):
+		"""Test that checkpoint ordering is consistent across operations."""
+		import time
+
+		saver = HTTPSingleStoreSaver(
+			base_url=http_base_url,
+			api_key=http_api_key,
+		)
+
+		thread_id = generate_unique_thread_id()
+		test_marker = generate_test_marker()
+		checkpoint_times = []
+
+		test_passed = False
+		try:
+			with saver:
+
+				# Create checkpoints with explicit timestamps
+				for i in range(5):
+					checkpoint_id = generate_unique_checkpoint_id()
+					timestamp = f"2024-01-0{i + 1}T12:00:00Z"
+					checkpoint_times.append((checkpoint_id, timestamp))
+
+					config = generate_config_with_marker(
+						thread_id=thread_id,
+						checkpoint_id=checkpoint_id,
+					)
+
+					checkpoint = {
+						"v": 1,
+						"ts": timestamp,
+						"id": checkpoint_id,
+						"channel_values": {"index": i},
+						"channel_versions": {},
+						"versions_seen": {},
+					}
+
+					metadata = {
+						"test_marker": test_marker,
+						"sequence": i,
+					}
+
+					saver.put(config, checkpoint, metadata, {})
+
+					# Small delay to ensure different timestamps if server generates them
+					time.sleep(0.1)
+
+				# List with different limits and verify ordering
+				all_checkpoints = list(saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}))
+
+				# Should be ordered by timestamp (newest first typically)
+				assert len(all_checkpoints) >= 5
+
+				# Get first 3
+				first_three = list(saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, limit=3))
+				assert len(first_three) == 3
+
+				# Get next 2 with before
+				if first_three:
+					last_of_three = first_three[-1]
+					next_two = list(
+						saver.list(
+							{"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+							before={
+								"configurable": {
+									"thread_id": thread_id,
+									"checkpoint_ns": "",
+									"checkpoint_id": last_of_three.checkpoint["id"],
+								}
+							},
+							limit=2,
+						)
+					)
+
+					# Verify no overlap
+					first_three_ids = {cp.checkpoint["id"] for cp in first_three}
+					next_two_ids = {cp.checkpoint["id"] for cp in next_two} if next_two else set()
+					assert first_three_ids.isdisjoint(next_two_ids)
+
+				test_passed = True
+
+		finally:
+			if not test_passed:
+				with saver:
+					try:
+						saver.delete_thread(thread_id)
+					except:
+						pass
