@@ -23,6 +23,7 @@ from langgraph.checkpoint.base import (
 from langgraph.checkpoint.serde.base import SerializerProtocol
 from langgraph.checkpoint.singlestore.base import BaseSingleStoreSaver
 
+from .aio import AsyncHTTPSingleStoreSaver
 from .client import HTTPClient, HTTPClientError, RetryConfig
 from .constants import INVALID_REQUEST_PAYLOAD, INVALID_RESPONSE
 from .schemas import (
@@ -83,10 +84,18 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		self.pool_maxsize = pool_maxsize
 		self.lock = threading.Lock()
 		self._client: HTTPClient | None = None
+		self._client_context = None
+		self._http_client = None
 
-	@contextmanager
-	def _get_client(self) -> Iterator[HTTPClient]:
-		"""Get or create HTTP client."""
+	def open(self) -> HTTPSingleStoreSaver:
+		"""Open the HTTP client connection.
+
+		Creates and stores the HTTP client for connection pooling.
+		Can be called multiple times safely.
+
+		Returns:
+			Self for method chaining
+		"""
 		if self._client is None:
 			client = HTTPClient(
 				base_url=self.base_url,
@@ -97,10 +106,44 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 				pool_connections=self.pool_connections,
 				pool_maxsize=self.pool_maxsize,
 			)
-			with client.create() as http_client:
-				yield http_client
-		else:
-			yield self._client
+			# Create the actual httpx client
+			self._client_context = client.create()
+			self._http_client = self._client_context.__enter__()
+			self._client = self._http_client
+		return self
+
+	def close(self) -> None:
+		"""Close the HTTP client connection.
+
+		Cleans up the HTTP client and connection pool.
+		"""
+		if self._client is not None:
+			if hasattr(self, '_client_context') and self._client_context:
+				try:
+					self._client_context.__exit__(None, None, None)
+				except Exception:
+					pass  # Ignore cleanup errors
+			self._client = None
+			self._client_context = None
+			self._http_client = None
+
+	def __enter__(self) -> HTTPSingleStoreSaver:
+		"""Enter context manager."""
+		return self.open()
+
+	def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+		"""Exit context manager."""
+		self.close()
+
+	@contextmanager
+	def _get_client(self) -> Iterator[HTTPClient]:
+		"""Get or create HTTP client.
+
+		Lazily creates and caches the client on first use.
+		"""
+		if self._client is None:
+			self.open()
+		yield self._client
 
 	@classmethod
 	@contextmanager
@@ -123,21 +166,11 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 			HTTPSingleStoreSaver instance
 		"""
 		saver = cls(base_url=base_url, base_path=base_path, api_key=api_key, **kwargs)
-		client = HTTPClient(
-			base_url=base_url,
-			base_path=base_path,
-			api_key=api_key,
-			timeout=kwargs.get("timeout", 30.0),
-			retry_config=kwargs.get("retry_config"),
-			pool_connections=kwargs.get("pool_connections", 10),
-			pool_maxsize=kwargs.get("pool_maxsize", 20),
-		)
-		with client.create() as http_client:
-			saver._client = http_client
-			try:
-				yield saver
-			finally:
-				saver._client = None
+		try:
+			saver.open()
+			yield saver
+		finally:
+			saver.close()
 
 	def setup(self) -> None:
 		"""Set up the checkpoint database via HTTP API."""
@@ -468,6 +501,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 __all__ = [
 	"INVALID_REQUEST_PAYLOAD",
 	"INVALID_RESPONSE",
+	"AsyncHTTPSingleStoreSaver",
 	"HTTPClient",
 	"HTTPClientError",
 	"HTTPSingleStoreSaver",
