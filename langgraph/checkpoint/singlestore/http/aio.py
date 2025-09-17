@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import pprint
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
+from functools import wraps
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -45,12 +48,212 @@ from .utils import (
 	transform_pending_writes,
 )
 
+# Configure logger for this module
+logger = logging.getLogger(__name__)
+
+
+def _make_readable(obj: Any, max_str_length: int = 200) -> str:
+	"""Convert objects to human-readable format with proper indentation."""
+	if obj is None:
+		return "None"
+
+	if isinstance(obj, str | int | float | bool):
+		if isinstance(obj, str) and len(obj) > max_str_length:
+			return f'"{obj[:max_str_length]}..."'
+		return repr(obj)
+
+	if isinstance(obj, list | tuple | dict):
+		# Use pprint for complex structures
+		formatted = pprint.pformat(obj, indent=2, width=120, depth=4)
+		# Limit total output length
+		if len(formatted) > 1000:
+			return formatted[:1000] + "..."
+		return formatted
+
+	# For Pydantic models and other objects with dict representation
+	if hasattr(obj, "model_dump"):
+		return _make_readable(obj.model_dump())
+	elif hasattr(obj, "__dict__"):
+		return _make_readable(obj.__dict__)
+	else:
+		return str(obj)
+
+
+def log_method_async(func):
+	"""Decorator to log async method inputs and outputs with nice formatting."""
+
+	@wraps(func)
+	async def wrapper(self, *args, **kwargs):
+		method_name = func.__name__
+
+		# Log method entry
+		logger.info("")  # Empty line for spacing
+		logger.info(f"{'=' * 80}")
+		logger.info(f"ENTERING: {method_name}")
+		logger.info(f"{'=' * 80}")
+
+		# Log inputs
+		if args:
+			logger.info("ARGS:")
+			for i, arg in enumerate(args):
+				logger.info(f"  [{i}]: {_make_readable(arg)}")
+
+		if kwargs:
+			logger.info("KWARGS:")
+			for key, value in kwargs.items():
+				logger.info(f"  {key}: {_make_readable(value)}")
+
+		logger.info("")  # Empty line after inputs
+
+		try:
+			# Execute the method
+			result = await func(self, *args, **kwargs)
+
+			# Log output
+			logger.info(f"{'=' * 80}")
+			logger.info(f"EXITING: {method_name}")
+			logger.info(f"{'=' * 80}")
+			logger.info(f"RESULT: {_make_readable(result)}")
+			logger.info("")  # Empty line after result
+
+			return result
+
+		except Exception as e:
+			# Log exceptions
+			logger.error(f"{'=' * 80}")
+			logger.error(f"ERROR in {method_name}")
+			logger.error(f"{'=' * 80}")
+			logger.error(f"Exception: {type(e).__name__}: {e!s}")
+			logger.error("")  # Empty line after error
+			raise
+
+	return wrapper
+
+
+def log_method_sync(func):
+	"""Decorator to log sync method inputs and outputs with nice formatting."""
+
+	@wraps(func)
+	def wrapper(self, *args, **kwargs):
+		method_name = func.__name__
+
+		# Log method entry
+		logger.info("")  # Empty line for spacing
+		logger.info(f"{'=' * 80}")
+		logger.info(f"ENTERING: {method_name}")
+		logger.info(f"{'=' * 80}")
+
+		# Log inputs
+		if args:
+			logger.info("ARGS:")
+			for i, arg in enumerate(args):
+				logger.info(f"  [{i}]: {_make_readable(arg)}")
+
+		if kwargs:
+			logger.info("KWARGS:")
+			for key, value in kwargs.items():
+				logger.info(f"  {key}: {_make_readable(value)}")
+
+		logger.info("")  # Empty line after inputs
+
+		try:
+			# Execute the method
+			result = func(self, *args, **kwargs)
+
+			# Log output
+			logger.info(f"{'=' * 80}")
+			logger.info(f"EXITING: {method_name}")
+			logger.info(f"{'=' * 80}")
+			logger.info(f"RESULT: {_make_readable(result)}")
+			logger.info("")  # Empty line after result
+
+			return result
+
+		except Exception as e:
+			# Log exceptions
+			logger.error(f"{'=' * 80}")
+			logger.error(f"ERROR in {method_name}")
+			logger.error(f"{'=' * 80}")
+			logger.error(f"Exception: {type(e).__name__}: {e!s}")
+			logger.error("")  # Empty line after error
+			raise
+
+	return wrapper
+
+
+def log_async_iterator(func):
+	"""Special decorator for async methods that return AsyncIterator."""
+
+	@wraps(func)
+	async def wrapper(self, *args, **kwargs):
+		method_name = func.__name__
+
+		# Log method entry
+		logger.info("")  # Empty line for spacing
+		logger.info(f"{'=' * 80}")
+		logger.info(f"ENTERING: {method_name}")
+		logger.info(f"{'=' * 80}")
+
+		# Log inputs
+		if args:
+			logger.info("ARGS:")
+			for i, arg in enumerate(args):
+				logger.info(f"  [{i}]: {_make_readable(arg)}")
+
+		if kwargs:
+			logger.info("KWARGS:")
+			for key, value in kwargs.items():
+				logger.info(f"  {key}: {_make_readable(value)}")
+
+		logger.info("")  # Empty line after inputs
+
+		try:
+			# Execute the method to get the async iterator
+			async_iter = func(self, *args, **kwargs)
+
+			# Log that we're returning an iterator
+			logger.info(f"{'=' * 80}")
+			logger.info(f"CREATED ASYNC ITERATOR: {method_name}")
+			logger.info(f"{'=' * 80}")
+			logger.info("")
+
+			# Wrap the iterator to log yielded values
+			async def logged_iterator():
+				item_count = 0
+				async for item in async_iter:
+					item_count += 1
+					logger.info(f"{'=' * 80}")
+					logger.info(f"YIELDING ITEM {item_count} from {method_name}")
+					logger.info(f"{'=' * 80}")
+					logger.info(f"ITEM: {_make_readable(item)}")
+					logger.info("")
+					yield item
+
+				logger.info(f"{'=' * 80}")
+				logger.info(f"ITERATOR EXHAUSTED: {method_name} (yielded {item_count} items)")
+				logger.info(f"{'=' * 80}")
+				logger.info("")
+
+			return logged_iterator()
+
+		except Exception as e:
+			# Log exceptions
+			logger.error(f"{'=' * 80}")
+			logger.error(f"ERROR in {method_name}")
+			logger.error(f"{'=' * 80}")
+			logger.error(f"Exception: {type(e).__name__}: {e!s}")
+			logger.error("")  # Empty line after error
+			raise
+
+	return wrapper
+
 
 class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 	"""Async HTTP-based checkpointer that stores checkpoints via API calls."""
 
 	lock: asyncio.Lock
 
+	# @log_method_sync
 	def __init__(
 		self,
 		base_url: str,
@@ -173,6 +376,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		finally:
 			await saver.close()
 
+	# @log_method_async
 	async def setup(self) -> None:
 		"""Set up the checkpoint database via HTTP API."""
 		async with self.lock, self._get_client() as client:
@@ -197,6 +401,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			except HTTPClientError:
 				raise
 
+	# @log_async_iterator
 	async def alist(
 		self,
 		config: RunnableConfig | None,
@@ -272,11 +477,13 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			except HTTPClientError:
 				raise
 
+	# @log_method_async
 	async def aget(self, config: RunnableConfig) -> Checkpoint | None:
 		"""Get a checkpoint from the database via HTTP API."""
 		checkpoint_tuple = await self.aget_tuple(config)
 		return checkpoint_tuple.checkpoint if checkpoint_tuple else None
 
+	# @log_method_async
 	async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
 		"""Get a checkpoint tuple from the database via HTTP API."""
 		thread_id = config["configurable"]["thread_id"]
@@ -319,6 +526,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 					return None
 				raise
 
+	# @log_method_async
 	async def aput(
 		self,
 		config: RunnableConfig,
@@ -406,6 +614,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			}
 		}
 
+	# @log_method_async
 	async def aput_writes(
 		self,
 		config: RunnableConfig,
@@ -451,6 +660,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			except HTTPClientError:
 				raise
 
+	# @log_method_async
 	async def adelete_thread(self, thread_id: str) -> None:
 		"""Delete all checkpoints and writes associated with a thread ID via HTTP API."""
 		async with self.lock, self._get_client() as client:
@@ -504,6 +714,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		)
 
 	# Sync methods that delegate to async via run_coroutine_threadsafe
+	# @log_method_sync
 	def list(
 		self,
 		config: RunnableConfig | None,
@@ -533,6 +744,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			except StopAsyncIteration:
 				break
 
+	# @log_method_sync
 	def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
 		"""Get checkpoint tuple (sync bridge to async)."""
 		try:
@@ -545,11 +757,13 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			pass
 		return asyncio.run_coroutine_threadsafe(self.aget_tuple(config), self.loop).result()
 
+	# @log_method_sync
 	def get(self, config: RunnableConfig) -> Checkpoint | None:
 		"""Get checkpoint (sync bridge to async)."""
 		checkpoint_tuple = self.get_tuple(config)
 		return checkpoint_tuple.checkpoint if checkpoint_tuple else None
 
+	# @log_method_sync
 	def put(
 		self,
 		config: RunnableConfig,
@@ -562,6 +776,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			self.aput(config, checkpoint, metadata, new_versions), self.loop
 		).result()
 
+	# @log_method_sync
 	def put_writes(
 		self,
 		config: RunnableConfig,
@@ -574,6 +789,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			self.aput_writes(config, writes, task_id, task_path), self.loop
 		).result()
 
+	# @log_method_sync
 	def delete_thread(self, thread_id: str) -> None:
 		"""Delete thread (sync bridge to async)."""
 		try:
