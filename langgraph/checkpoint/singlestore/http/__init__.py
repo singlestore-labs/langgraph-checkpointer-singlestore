@@ -39,6 +39,7 @@ from .schemas import (
 	WriteData,
 )
 from .utils import (
+	TokenGetter,
 	encode_to_base64,
 	prepare_metadata_filter,
 	transform_channel_values,
@@ -54,8 +55,8 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 	def __init__(
 		self,
 		base_url: str,
+		api_key: TokenGetter,
 		base_path: str = "",
-		api_key: str | None = None,
 		serde: SerializerProtocol | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
@@ -100,7 +101,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 			client = HTTPClient(
 				base_url=self.base_url,
 				base_path=self.base_path,
-				api_key=self.api_key,
+				api_key_getter=self.api_key,
 				timeout=self.timeout,
 				retry_config=self.retry_config,
 				pool_connections=self.pool_connections,
@@ -118,7 +119,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		Cleans up the HTTP client and connection pool.
 		"""
 		if self._client is not None:
-			if hasattr(self, '_client_context') and self._client_context:
+			if hasattr(self, "_client_context") and self._client_context:
 				try:
 					self._client_context.__exit__(None, None, None)
 				except Exception:
@@ -150,8 +151,8 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 	def from_url(
 		cls,
 		base_url: str,
+		api_key: TokenGetter,
 		base_path: str = "",
-		api_key: str | None = None,
 		**kwargs,
 	) -> Iterator[HTTPSingleStoreSaver]:
 		"""Create a new HTTPSingleStoreSaver instance from a URL.
@@ -159,7 +160,7 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		Args:
 			base_url: Base URL of the checkpoint HTTP server
 			base_path: Base path to prepend to all endpoints
-			api_key: Optional API key for authentication
+			api_key: Optional API key getter for authentication
 			**kwargs: Additional arguments for HTTPSingleStoreSaver
 
 		Yields:

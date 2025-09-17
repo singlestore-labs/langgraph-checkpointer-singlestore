@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import base64
 import uuid
+from collections.abc import Callable
 from typing import Any
+
+TokenGetter = Callable[[], str | None] | str | None
 
 
 def encode_to_base64(data: bytes) -> str:
@@ -99,6 +102,7 @@ def prepare_metadata_filter(metadata: dict[str, Any]) -> dict[str, Any]:
 	Returns:
 	    Prepared metadata filter dictionary with JSON-serializable values
 	"""
+
 	def convert_value(value: Any) -> Any:
 		"""Recursively convert values to JSON-serializable format."""
 		if isinstance(value, uuid.UUID):
@@ -116,7 +120,8 @@ def prepare_metadata_filter(metadata: dict[str, Any]) -> dict[str, Any]:
 		elif isinstance(value, bytes):
 			# Convert bytes to base64 string for JSON compatibility
 			import base64
-			return base64.b64encode(value).decode('utf-8')
+
+			return base64.b64encode(value).decode("utf-8")
 		else:
 			# Keep primitives (str, int, float, bool, None) as-is
 			return value

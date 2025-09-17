@@ -1062,7 +1062,7 @@ class TestPendingWrites:
 		# Generate UUIDs for task IDs
 		task_ids = [generate_uuid_string() for _ in writes]
 
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			for task_id, write_batch in zip(task_ids, writes):
 				saver.put_writes(config, write_batch, task_id=task_id)
 
@@ -1097,7 +1097,7 @@ class TestPendingWrites:
 
 		writes = [("binary_channel", binary_data)]
 
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			saver.put_writes(config, writes, task_id="binary-task")
 
 		request = httpx_mock.get_request()
@@ -1144,7 +1144,7 @@ class TestValidationErrors:
 			},
 		)
 
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			config = {"configurable": {"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}}
 
 			# Should raise error when trying to parse response
@@ -1164,7 +1164,7 @@ class TestValidationErrors:
 			},
 		)
 
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			config = {"configurable": {"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}}
 
 			# Should raise error when trying to parse response
@@ -1174,7 +1174,7 @@ class TestValidationErrors:
 
 	def test_put_with_invalid_checkpoint_data(self, httpx_mock: HTTPXMock):
 		"""Test put with checkpoint data that fails validation."""
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			config = {"configurable": {"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}}
 
 			# Create checkpoint with invalid data type for version
@@ -1202,7 +1202,7 @@ class TestValidationErrors:
 			},
 		)
 
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			# Should raise error when trying to parse response
 			with pytest.raises(HTTPClientError) as exc_info:
 				saver.setup()
@@ -1218,7 +1218,7 @@ class TestValidationErrors:
 			}
 		}
 
-		with HTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		with HTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			# task_id should be string, not int
 			writes = [("channel1", "value1")]
 

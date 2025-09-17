@@ -1620,7 +1620,7 @@ class TestAsyncValidationErrors:
 			}
 		}
 
-		async with AsyncHTTPSingleStoreSaver.from_url("http://localhost:8080") as saver:
+		async with AsyncHTTPSingleStoreSaver.from_url("http://localhost:8080", api_key=None) as saver:
 			# task_id should be string, not int
 			writes = [("channel1", "value1")]
 

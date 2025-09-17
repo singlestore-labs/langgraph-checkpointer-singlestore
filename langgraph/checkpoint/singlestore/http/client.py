@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from .schemas import ErrorResponse
+from .utils import TokenGetter
 
 
 class HTTPClientError(Exception):
@@ -51,20 +52,15 @@ class BaseHTTPClient:
 		self,
 		base_url: str,
 		base_path: str = "",
-		api_key: str | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
 		headers: dict[str, str] | None = None,
 	):
 		self.base_url = base_url.rstrip("/")
 		self.base_path = base_path
-		self.api_key = api_key
 		self.timeout = httpx.Timeout(timeout=timeout, connect=10.0, pool=5.0)
 		self.retry_config = retry_config or RetryConfig()
 		self.headers = headers or {}
-
-		if self.api_key:
-			self.headers["Authorization"] = f"Bearer {self.api_key}"
 		self.headers["Content-Type"] = "application/json"
 		self.headers["Accept"] = "application/json"
 
@@ -119,15 +115,16 @@ class HTTPClient(BaseHTTPClient):
 	def __init__(
 		self,
 		base_url: str,
+		api_key_getter: TokenGetter,
 		base_path: str = "",
-		api_key: str | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
 		headers: dict[str, str] | None = None,
 		pool_connections: int = 10,
 		pool_maxsize: int = 20,
 	):
-		super().__init__(base_url, base_path, api_key, timeout, retry_config, headers)
+		super().__init__(base_url, base_path, timeout, retry_config, headers)
+		self.api_key_getter = api_key_getter
 
 		# Configure connection pooling
 		self.limits = httpx.Limits(
@@ -170,6 +167,11 @@ class HTTPClient(BaseHTTPClient):
 		url = f"{self.base_url}{self.base_path}{path}"
 		last_error: Exception | None = None
 
+		additional_headers = {}
+		api_key = self.api_key_getter() if callable(self.api_key_getter) else self.api_key_getter
+		if api_key:
+			additional_headers["Authorization"] = f"Bearer {api_key}"
+
 		for attempt in range(self.retry_config.max_retries + 1):
 			try:
 				response = self.client.request(
@@ -177,6 +179,7 @@ class HTTPClient(BaseHTTPClient):
 					url=url,
 					json=payload,
 					params=params,
+					headers=additional_headers,
 				)
 
 				if not self._should_retry(response, None):
@@ -225,15 +228,16 @@ class AsyncHTTPClient(BaseHTTPClient):
 	def __init__(
 		self,
 		base_url: str,
+		api_key_getter: TokenGetter,
 		base_path: str = "",
-		api_key: str | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
 		headers: dict[str, str] | None = None,
 		max_connections: int = 100,
 		max_keepalive_connections: int = 20,
 	):
-		super().__init__(base_url, base_path, api_key, timeout, retry_config, headers)
+		super().__init__(base_url, base_path, timeout, retry_config, headers)
+		self.api_key_getter = api_key_getter
 
 		# Configure connection pooling
 		self.limits = httpx.Limits(
@@ -276,6 +280,11 @@ class AsyncHTTPClient(BaseHTTPClient):
 		url = f"{self.base_url}{self.base_path}{path}"
 		last_error: Exception | None = None
 
+		additional_headers = {}
+		api_key = self.api_key_getter() if callable(self.api_key_getter) else self.api_key_getter
+		if api_key:
+			additional_headers["Authorization"] = f"Bearer {api_key}"
+
 		for attempt in range(self.retry_config.max_retries + 1):
 			try:
 				response = await self.client.request(
@@ -283,6 +292,7 @@ class AsyncHTTPClient(BaseHTTPClient):
 					url=url,
 					json=json,
 					params=params,
+					headers=additional_headers,
 				)
 
 				if not self._should_retry(response, None):

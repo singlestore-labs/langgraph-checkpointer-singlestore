@@ -38,6 +38,7 @@ from .schemas import (
 	WriteData,
 )
 from .utils import (
+	TokenGetter,
 	encode_to_base64,
 	prepare_metadata_filter,
 	transform_channel_values,
@@ -53,8 +54,8 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 	def __init__(
 		self,
 		base_url: str,
+		api_key: TokenGetter,
 		base_path: str = "",
-		api_key: str | None = None,
 		serde: SerializerProtocol | None = None,
 		timeout: float = 30.0,
 		retry_config: RetryConfig | None = None,
@@ -99,8 +100,8 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		if self._client is None:
 			client = AsyncHTTPClient(
 				base_url=self.base_url,
+				api_key_getter=self.api_key,
 				base_path=self.base_path,
-				api_key=self.api_key,
 				timeout=self.timeout,
 				retry_config=self.retry_config,
 				max_connections=self.max_connections,
@@ -150,8 +151,8 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 	async def from_url(
 		cls,
 		base_url: str,
+		api_key: TokenGetter,
 		base_path: str = "",
-		api_key: str | None = None,
 		**kwargs,
 	) -> AsyncIterator[AsyncHTTPSingleStoreSaver]:
 		"""Create a new AsyncHTTPSingleStoreSaver instance from a URL.
@@ -159,13 +160,13 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		Args:
 			base_url: Base URL of the checkpoint HTTP server
 			base_path: Base path to prepend to all endpoints
-			api_key: Optional API key for authentication
+			api_key: Optional API key getter for authentication
 			**kwargs: Additional arguments for AsyncHTTPSingleStoreSaver
 
 		Yields:
 			AsyncHTTPSingleStoreSaver instance
 		"""
-		saver = cls(base_url=base_url, base_path=base_path, api_key=api_key, **kwargs)
+		saver = cls(base_url=base_url, api_key=api_key, base_path=base_path, **kwargs)
 		try:
 			await saver.open()
 			yield saver
