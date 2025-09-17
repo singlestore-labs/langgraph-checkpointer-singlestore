@@ -466,12 +466,8 @@ def cleanup_test_data(saver, test_marker: str, thread_ids: List[str] = None) -> 
 
 	try:
 		if thread_ids:
-			# Clear any existing client to force a new context
-			saver._client = None
-
-			# Clean specific threads - need to use client context
-			with saver._get_client() as client:
-				saver._client = client
+			# Use saver context manager for proper client lifecycle
+			with saver:
 				for thread_id in thread_ids:
 					try:
 						saver.delete_thread(thread_id)

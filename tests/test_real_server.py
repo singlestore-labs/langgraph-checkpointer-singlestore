@@ -16,6 +16,7 @@ import pytest
 from langgraph.checkpoint.singlestore.http.schemas import generate_uuid_string
 from langgraph.checkpoint.singlestore.http import HTTPSingleStoreSaver
 from langgraph.checkpoint.singlestore.http.aio import AsyncHTTPSingleStoreSaver
+from langgraph.checkpoint.singlestore.http.client import HTTPClientError
 
 from tests.utils.test_data_generators import (
 	generate_unique_thread_id,
@@ -25,6 +26,7 @@ from tests.utils.test_data_generators import (
 	generate_checkpoint_with_marker,
 	generate_config_with_marker,
 	cleanup_test_data,
+	generate_binary_test_pattern,
 )
 
 
@@ -39,8 +41,7 @@ class TestIntegrationBasicFlow:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			# This should succeed if Go server is properly configured
 			saver.setup()
 
@@ -51,8 +52,7 @@ class TestIntegrationBasicFlow:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Create test data with UUIDs
 			thread_id = generate_uuid_string()
@@ -119,8 +119,7 @@ class TestIntegrationBinaryData:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Create test data with binary blob
 			thread_id = generate_uuid_string()
@@ -174,8 +173,7 @@ class TestIntegrationBinaryData:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Create checkpoint first
 			thread_id = generate_uuid_string()
@@ -245,8 +243,7 @@ class TestIntegrationAsync:
 			api_key=http_api_key,
 		)
 
-		async with saver._get_client() as client:
-			saver._client = client
+		async with saver:
 
 			# Test async setup
 			await saver.setup()
@@ -302,8 +299,7 @@ class TestIntegrationMetadataFiltering:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Create multiple checkpoints with different metadata
 			thread_id = generate_uuid_string()
@@ -370,8 +366,7 @@ class TestIntegrationErrorHandling:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Try to get non-existent checkpoint
 			non_existent_config = {
@@ -395,8 +390,7 @@ class TestIntegrationErrorHandling:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Invalid UUID should cause validation error
 			invalid_config = {
@@ -664,8 +658,7 @@ class TestRealServerBasicOperations:
 		)
 
 		# Test setup - should succeed even if already done
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			result = saver.setup()
 
 			# Setup should either succeed or be idempotent
@@ -709,8 +702,7 @@ class TestRealServerBasicOperations:
 		new_versions = {"messages": "1.0", "counter": "1.0"}
 
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			try:
 				# 1. CREATE - Put checkpoint
@@ -824,8 +816,7 @@ class TestRealServerBasicOperations:
 		child_checkpoint_id = generate_unique_checkpoint_id()
 
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			try:
 				# Create parent checkpoint
@@ -930,8 +921,7 @@ class TestRealServerBasicOperations:
 		}
 
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Store minimal checkpoint
 				saver.put(config, minimal_checkpoint, minimal_metadata, {})
@@ -979,8 +969,7 @@ class TestRealServerBasicOperations:
 			checkpoint_id=non_existent_checkpoint_id,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Test get() returns None for non-existent checkpoint
 			result = saver.get(non_existent_config)
@@ -1006,8 +995,7 @@ class TestRealServerBasicOperations:
 			api_key=http_api_key,
 		)
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 
 			# Test 1: Invalid checkpoint ID format (if server validates)
 			try:
@@ -1060,8 +1048,7 @@ class TestRealServerListingAndFiltering:
 		checkpoint_count = 5
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create series of checkpoints
 				checkpoint_series = create_checkpoint_series(
@@ -1114,8 +1101,7 @@ class TestRealServerListingAndFiltering:
 		test_marker = generate_test_marker()
 
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Generate various metadata test cases
 				metadata_cases = generate_metadata_test_cases(test_marker)
@@ -1191,8 +1177,7 @@ class TestRealServerListingAndFiltering:
 		test_marker = generate_test_marker()
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create checkpoints with nested metadata
 				test_cases = [
@@ -1274,8 +1259,7 @@ class TestRealServerListingAndFiltering:
 		limit = 5
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create series of checkpoints
 				checkpoint_series = create_checkpoint_series(
@@ -1335,8 +1319,7 @@ class TestRealServerListingAndFiltering:
 		test_marker = generate_test_marker()
 		namespaces = ["", "namespace_a", "namespace_b"]
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create checkpoints in each namespace
 				all_checkpoint_ids = []
@@ -1410,8 +1393,7 @@ class TestRealServerListingAndFiltering:
 		test_marker = generate_test_marker()
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create complex dataset: 2 namespaces × 3 types × 2 users = 12 checkpoints
 				checkpoint_ids = []
@@ -1541,8 +1523,7 @@ class TestRealServerBinaryAndLargeData:
 
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				checkpoint_ids = []
 
@@ -1649,8 +1630,7 @@ class TestRealServerBinaryAndLargeData:
 
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				successful_sizes = []
 
@@ -1750,8 +1730,7 @@ class TestRealServerBinaryAndLargeData:
 
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Generate mixed channel types
 				mixed_channels = generate_mixed_channel_types(test_marker)
@@ -1838,8 +1817,7 @@ class TestRealServerBinaryAndLargeData:
 
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Get Unicode test strings
 				unicode_strings = generate_unicode_test_strings()
@@ -1925,8 +1903,7 @@ class TestRealServerBinaryAndLargeData:
 
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Test data with various null scenarios
 				null_test_data = {
@@ -2016,8 +1993,7 @@ class TestRealServerPendingWrites:
 		thread_id = generate_unique_thread_id()
 		test_marker = generate_test_marker()
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Step 1: Create initial checkpoint
 				checkpoint_id = generate_unique_checkpoint_id()
@@ -2116,8 +2092,7 @@ class TestRealServerPendingWrites:
 		thread_id = generate_unique_thread_id()
 		test_marker = generate_test_marker()
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create checkpoint
 				checkpoint_id = generate_unique_checkpoint_id()
@@ -2208,8 +2183,7 @@ class TestRealServerPendingWrites:
 		thread_id = generate_unique_thread_id()
 		test_marker = generate_test_marker()
 		test_passed = False
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create checkpoint
 				checkpoint_id = generate_unique_checkpoint_id()
@@ -2293,8 +2267,7 @@ class TestRealServerPendingWrites:
 		threads_data = []
 		test_passed = False
 
-		with saver._get_client() as client:
-			saver._client = client
+		with saver:
 			try:
 				# Create checkpoints and writes in multiple threads
 				for i in range(thread_count):
