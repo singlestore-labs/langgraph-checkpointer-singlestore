@@ -21,10 +21,10 @@ To add a new migration, add a new string to the MIGRATIONS list.
 The position of the migration in the list is the version number.
 """
 MIGRATIONS = [
-	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_migrations (
+	"""CREATE TABLE IF NOT EXISTS checkpoint_migrations (
     v INTEGER PRIMARY KEY
 );""",
-	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoints (
+	"""CREATE TABLE IF NOT EXISTS checkpoints (
     thread_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     checkpoint_id TEXT NOT NULL,
@@ -32,18 +32,20 @@ MIGRATIONS = [
     type TEXT,
     checkpoint JSON NOT NULL,
     metadata JSON NOT NULL DEFAULT '{}',
-    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id),
+    INDEX checkpoints_thread_id_idx (thread_id)
 );""",
-	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_blobs (
+	"""CREATE TABLE IF NOT EXISTS checkpoint_blobs (
     thread_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     channel TEXT NOT NULL,
     version TEXT NOT NULL,
     type TEXT NOT NULL,
-    `blob` LONGBLOB,
-    PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
+    `blob` LONGBLOB NULL,
+    PRIMARY KEY (thread_id, checkpoint_ns, channel, version),
+    INDEX checkpoint_blobs_thread_id_idx (thread_id)
 );""",
-	"""CREATE ROWSTORE TABLE IF NOT EXISTS checkpoint_writes (
+	"""CREATE TABLE IF NOT EXISTS checkpoint_writes (
     thread_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     checkpoint_id TEXT NOT NULL,
@@ -52,22 +54,10 @@ MIGRATIONS = [
     channel TEXT NOT NULL,
     type TEXT,
     `blob` LONGBLOB NOT NULL,
-    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+    task_path TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx),
+    INDEX checkpoint_writes_thread_id_idx (thread_id)
 );""",
-	"ALTER TABLE checkpoint_blobs MODIFY COLUMN `blob` LONGBLOB NULL;",
-	# NOTE: this is a no-op migration to ensure that the versions in the migrations table are correct.
-	# This is necessary due to an empty migration previously added to the list.
-	"SELECT 1;",
-	"""
-    CREATE INDEX checkpoints_thread_id_idx ON checkpoints(thread_id);
-    """,
-	"""
-    CREATE INDEX checkpoint_blobs_thread_id_idx ON checkpoint_blobs(thread_id);
-    """,
-	"""
-    CREATE INDEX checkpoint_writes_thread_id_idx ON checkpoint_writes(thread_id);
-    """,
-	"""ALTER TABLE checkpoint_writes ADD COLUMN task_path TEXT NOT NULL DEFAULT '';""",
 ]
 
 SELECT_SQL = """

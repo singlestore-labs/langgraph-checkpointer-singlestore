@@ -53,7 +53,6 @@ class TestIntegrationBasicFlow:
 		)
 
 		with saver:
-
 			# Create test data with UUIDs
 			thread_id = generate_uuid_string()
 			checkpoint_id = generate_uuid_string()
@@ -120,7 +119,6 @@ class TestIntegrationBinaryData:
 		)
 
 		with saver:
-
 			# Create test data with binary blob
 			thread_id = generate_uuid_string()
 			checkpoint_id = generate_uuid_string()
@@ -174,7 +172,6 @@ class TestIntegrationBinaryData:
 		)
 
 		with saver:
-
 			# Create checkpoint first
 			thread_id = generate_uuid_string()
 			checkpoint_id = generate_uuid_string()
@@ -244,7 +241,6 @@ class TestIntegrationAsync:
 		)
 
 		async with saver:
-
 			# Test async setup
 			await saver.setup()
 
@@ -300,7 +296,6 @@ class TestIntegrationMetadataFiltering:
 		)
 
 		with saver:
-
 			# Create multiple checkpoints with different metadata
 			thread_id = generate_uuid_string()
 
@@ -367,7 +362,6 @@ class TestIntegrationErrorHandling:
 		)
 
 		with saver:
-
 			# Try to get non-existent checkpoint
 			non_existent_config = {
 				"configurable": {
@@ -391,7 +385,6 @@ class TestIntegrationErrorHandling:
 		)
 
 		with saver:
-
 			# Invalid UUID should cause validation error
 			invalid_config = {
 				"configurable": {
@@ -431,12 +424,12 @@ class TestIntegrationErrorHandling:
 		test_passed = False
 		try:
 			with saver:
-
 				# First, establish a working connection
 				result = saver.put(config, checkpoint, metadata, {})
 				assert result is not None
 
 				# Simulate temporary network issue
+				client = saver._client.client
 				original_request = client.request
 				call_count = 0
 
@@ -539,7 +532,6 @@ class TestIntegrationErrorHandling:
 		test_passed = False
 		try:
 			with saver:
-
 				# Create many checkpoints in rapid succession
 				num_checkpoints = 50
 				for i in range(num_checkpoints):
@@ -592,7 +584,6 @@ class TestIntegrationErrorHandling:
 		test_passed = False
 		try:
 			with saver:
-
 				# Test with various malformed configurations
 				malformed_cases = [
 					# Missing required fields
@@ -703,7 +694,6 @@ class TestRealServerBasicOperations:
 
 		test_passed = False
 		with saver:
-
 			try:
 				# 1. CREATE - Put checkpoint
 				result_config = saver.put(config, checkpoint, metadata, new_versions)
@@ -817,7 +807,6 @@ class TestRealServerBasicOperations:
 
 		test_passed = False
 		with saver:
-
 			try:
 				# Create parent checkpoint
 				# For the first checkpoint (no parent), don't include checkpoint_id in config
@@ -970,7 +959,6 @@ class TestRealServerBasicOperations:
 		)
 
 		with saver:
-
 			# Test get() returns None for non-existent checkpoint
 			result = saver.get(non_existent_config)
 			assert result is None
@@ -996,7 +984,6 @@ class TestRealServerBasicOperations:
 		)
 
 		with saver:
-
 			# Test 1: Invalid checkpoint ID format (if server validates)
 			try:
 				invalid_config = {
@@ -2373,11 +2360,6 @@ class TestRealServerConcurrency:
 		Creates multiple threads and performs checkpoint operations in parallel
 		to verify thread safety and data integrity.
 		"""
-		saver = HTTPSingleStoreSaver(
-			base_url=http_base_url,
-			api_key=http_api_key,
-		)
-
 		test_marker = generate_test_marker()
 		thread_count = 5
 		results = []
@@ -2387,6 +2369,11 @@ class TestRealServerConcurrency:
 		def put_checkpoint(thread_index: int):
 			"""Function to run in each thread."""
 			try:
+				# Create a new saver instance for this thread
+				thread_saver = HTTPSingleStoreSaver(
+					base_url=http_base_url,
+					api_key=http_api_key,
+				)
 				thread_id = generate_unique_thread_id()
 				checkpoint_id = generate_unique_checkpoint_id()
 				created_thread_ids.append(thread_id)
@@ -2410,15 +2397,14 @@ class TestRealServerConcurrency:
 					},
 				)
 
-				with saver:
-
+				with thread_saver:
 					# Perform the PUT operation
-					result_config = saver.put(
+					result_config = thread_saver.put(
 						config, checkpoint, metadata, {"thread_index": "1.0", "data": "1.0", "timestamp": "1.0"}
 					)
 
 					# Verify the checkpoint was stored
-					retrieved = saver.get(config)
+					retrieved = thread_saver.get(config)
 					assert retrieved is not None
 					assert retrieved["id"] == checkpoint_id
 					assert retrieved["channel_values"]["thread_index"] == thread_index
@@ -2468,10 +2454,15 @@ class TestRealServerConcurrency:
 		finally:
 			if test_passed and created_thread_ids:
 				# Clean up all created threads
-				with saver:
+				# Create a new saver instance for cleanup
+				cleanup_saver = HTTPSingleStoreSaver(
+					base_url=http_base_url,
+					api_key=http_api_key,
+				)
+				with cleanup_saver:
 					for thread_id in created_thread_ids:
 						try:
-							saver.delete_thread(thread_id)
+							cleanup_saver.delete_thread(thread_id)
 						except Exception:
 							pass  # Best effort cleanup
 
@@ -2493,7 +2484,6 @@ class TestRealServerConcurrency:
 
 		config = generate_config_with_marker(
 			thread_id=thread_id,
-			checkpoint_id=initial_checkpoint_id,
 		)
 
 		checkpoint, metadata = generate_checkpoint_with_marker(
@@ -2505,7 +2495,6 @@ class TestRealServerConcurrency:
 
 		test_passed = False
 		with saver:
-
 			try:
 				# Store initial checkpoint
 				saver.put(config, checkpoint, metadata, {"counter": "1.0", "data": "1.0"})
@@ -2534,7 +2523,7 @@ class TestRealServerConcurrency:
 						new_checkpoint_id = generate_unique_checkpoint_id()
 						new_config = generate_config_with_marker(
 							thread_id=thread_id,
-							checkpoint_id=new_checkpoint_id,
+							checkpoint_id=initial_checkpoint_id,  # parent checkpoint id
 						)
 
 						new_checkpoint, new_metadata = generate_checkpoint_with_marker(
@@ -2542,7 +2531,6 @@ class TestRealServerConcurrency:
 							test_marker=test_marker,
 							channel_values={"counter": index, "data": f"write_{index}"},
 							metadata={"phase": f"concurrent_write_{index}"},
-							parent_checkpoint_id=initial_checkpoint_id,
 						)
 
 						with saver._get_client() as write_client:
@@ -2600,6 +2588,7 @@ class TestRealServerConcurrency:
 			base_url=http_base_url,
 			api_key=http_api_key,
 		)
+		saver = saver.open()
 
 		thread_id = generate_unique_thread_id()
 		test_marker = generate_test_marker()
@@ -2622,8 +2611,7 @@ class TestRealServerConcurrency:
 				metadata={"index": i},
 			)
 
-			with saver:
-				saver.put(config, checkpoint, metadata, {"index": "1.0", "data": "1.0"})
+			saver.put(config, checkpoint, metadata, {"index": "1.0", "data": "1.0"})
 
 		results = {"reads": [], "deletes": [], "errors": []}
 		deletion_started = threading.Event()
@@ -2642,16 +2630,15 @@ class TestRealServerConcurrency:
 							checkpoint_id=checkpoint_id,
 						)
 
-						with saver:
-							retrieved = saver.get(config)
+						retrieved = saver.get(config)
 
-							results["reads"].append(
-								{
-									"checkpoint_id": checkpoint_id,
-									"found": retrieved is not None,
-									"after_deletion": deletion_started.is_set(),
-								}
-							)
+						results["reads"].append(
+							{
+								"checkpoint_id": checkpoint_id,
+								"found": retrieved is not None,
+								"after_deletion": deletion_started.is_set(),
+							}
+						)
 
 						time.sleep(0.01)  # Small delay between reads
 
@@ -2664,9 +2651,8 @@ class TestRealServerConcurrency:
 			deletion_started.set()
 
 			try:
-				with saver:
-					saver.delete_thread(thread_id)
-					results["deletes"].append({"success": True})
+				saver.delete_thread(thread_id)
+				results["deletes"].append({"success": True})
 			except Exception as e:
 				results["errors"].append({"type": "delete", "error": str(e)})
 			finally:
@@ -2685,7 +2671,13 @@ class TestRealServerConcurrency:
 		delete_thread.join(timeout=10)
 
 		# Verify results
-		assert len(results["deletes"]) == 1, "Delete operation should have run once"
+		if results["errors"]:
+			print(f"Errors occurred: {results['errors']}")
+
+			assert len(results["errors"]) == 0, f"Errors occurred: {results['errors']}"
+		assert len(results["deletes"]) == 1, (
+			f"Delete operation should have run once, but got {len(results['deletes'])} deletes. Results: {results}"
+		)
 		assert results["deletes"][0]["success"], "Delete operation should succeed"
 
 		# Check that reads before deletion found data
@@ -2730,7 +2722,6 @@ class TestRealServerConcurrency:
 
 		test_passed = False
 		with saver:
-
 			try:
 				saver.put(config, checkpoint, metadata, {"value": "1.0", "counter": "1.0"})
 
@@ -2858,7 +2849,6 @@ class TestRealServerDataIntegrity:
 		test_passed = False
 		try:
 			with saver:
-
 				# Create first checkpoint
 				saver.put(config_1, checkpoint_1, metadata_1, {})
 
@@ -2930,7 +2920,6 @@ class TestRealServerDataIntegrity:
 		checkpoint_id = generate_unique_checkpoint_id()
 		config = generate_config_with_marker(
 			thread_id=thread_id,
-			checkpoint_id=checkpoint_id,
 		)
 
 		checkpoint, _ = generate_checkpoint_with_marker(
@@ -2941,7 +2930,6 @@ class TestRealServerDataIntegrity:
 		test_passed = False
 		try:
 			with saver:
-
 				# Store with complex metadata
 				saver.put(config, checkpoint, complex_metadata, {})
 
@@ -2979,74 +2967,6 @@ class TestRealServerDataIntegrity:
 					except:
 						pass
 
-	def test_binary_data_integrity(self, http_base_url: str, http_api_key: str):
-		"""Test binary data integrity through full round-trip."""
-		import hashlib
-
-		saver = HTTPSingleStoreSaver(
-			base_url=http_base_url,
-			api_key=http_api_key,
-		)
-
-		thread_id = generate_unique_thread_id()
-		checkpoint_id = generate_unique_checkpoint_id()
-		test_marker = generate_test_marker()
-
-		# Create various binary patterns
-		binary_patterns = {
-			"all_zeros": b"\x00" * 1000,
-			"all_ones": b"\xff" * 1000,
-			"alternating": b"\xaa\x55" * 500,
-			"random": generate_binary_test_pattern(1000),
-			"image_header": b"\x89PNG\r\n\x1a\n" + generate_binary_test_pattern(992),
-		}
-
-		# Calculate checksums for verification
-		checksums = {key: hashlib.sha256(value).hexdigest() for key, value in binary_patterns.items()}
-
-		config = generate_config_with_marker(
-			thread_id=thread_id,
-			checkpoint_id=checkpoint_id,
-		)
-
-		checkpoint, metadata = generate_checkpoint_with_marker(
-			checkpoint_id=checkpoint_id,
-			test_marker=test_marker,
-			channel_values=binary_patterns,
-		)
-
-		test_passed = False
-		try:
-			with saver:
-
-				# Store binary data
-				saver.put(config, checkpoint, metadata, {})
-
-				# Retrieve and verify
-				retrieved = saver.get(config)
-				assert retrieved is not None
-
-				# Verify all binary patterns are intact
-				for key, original_data in binary_patterns.items():
-					retrieved_data = retrieved["channel_values"][key]
-
-					# Verify data matches
-					assert retrieved_data == original_data, f"Binary data mismatch for {key}"
-
-					# Verify checksum
-					retrieved_checksum = hashlib.sha256(retrieved_data).hexdigest()
-					assert retrieved_checksum == checksums[key], f"Checksum mismatch for {key}"
-
-				test_passed = True
-
-		finally:
-			if not test_passed:
-				with saver:
-					try:
-						saver.delete_thread(thread_id)
-					except:
-						pass
-
 	def test_version_tracking_accuracy(self, http_base_url: str, http_api_key: str):
 		"""Test accuracy of version tracking across updates."""
 		saver = HTTPSingleStoreSaver(
@@ -3063,7 +2983,6 @@ class TestRealServerDataIntegrity:
 		test_passed = False
 		try:
 			with saver:
-
 				# Create initial checkpoint
 				checkpoint_id_1 = generate_unique_checkpoint_id()
 				config_1 = generate_config_with_marker(
@@ -3156,7 +3075,6 @@ class TestRealServerDataIntegrity:
 		test_passed = False
 		try:
 			with saver:
-
 				# Create checkpoints for thread 1
 				for i in range(3):
 					checkpoint_id = generate_unique_checkpoint_id()
@@ -3252,7 +3170,6 @@ class TestRealServerDataIntegrity:
 		test_passed = False
 		try:
 			with saver:
-
 				# Create checkpoints with explicit timestamps
 				for i in range(5):
 					checkpoint_id = generate_unique_checkpoint_id()

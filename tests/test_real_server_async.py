@@ -72,23 +72,22 @@ class TestAsyncIntegrationBasicFlow:
 
 		test_passed = False
 		async with saver:
-
 			try:
 				# 1. CREATE - Put checkpoint
-				result_config = await saver.put(config, checkpoint, metadata, new_versions)
+				result_config = await saver.aput(config, checkpoint, metadata, new_versions)
 
 				assert result_config["configurable"]["thread_id"] == thread_id
 				assert result_config["configurable"]["checkpoint_id"] == checkpoint_id
 
 				# 2. READ - Get checkpoint
-				retrieved = await saver.get(config)
+				retrieved = await saver.aget(config)
 				assert retrieved is not None
 				assert retrieved["id"] == checkpoint_id
 				assert retrieved["channel_values"]["counter"] == 1
 				assert retrieved["channel_values"]["messages"][0]["content"] == "Hello async world"
 
 				# Also test get_tuple
-				retrieved_tuple = await saver.get_tuple(config)
+				retrieved_tuple = await saver.aget_tuple(config)
 				assert retrieved_tuple is not None
 				assert retrieved_tuple.checkpoint["id"] == checkpoint_id
 				assert retrieved_tuple.metadata["test_marker"] == test_marker
@@ -119,11 +118,11 @@ class TestAsyncIntegrationBasicFlow:
 					},
 				)
 
-				await saver.put(config_2, checkpoint_2, updated_metadata, new_versions)
+				await saver.aput(config_2, checkpoint_2, updated_metadata, new_versions)
 
 				# 4. LIST - Verify both checkpoints exist
 				checkpoints = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}):
 					checkpoints.append(cp)
 
 				assert len(checkpoints) == 2
@@ -132,11 +131,11 @@ class TestAsyncIntegrationBasicFlow:
 				assert checkpoint_id_2 in checkpoint_ids
 
 				# 5. DELETE - Delete the thread
-				await saver.delete_thread(thread_id)
+				await saver.adelete_thread(thread_id)
 
 				# 6. VERIFY - Thread should be deleted
 				deleted_checkpoints = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}):
 					deleted_checkpoints.append(cp)
 
 				assert len(deleted_checkpoints) == 0
@@ -146,7 +145,7 @@ class TestAsyncIntegrationBasicFlow:
 			finally:
 				if not test_passed:
 					try:
-						await saver.delete_thread(thread_id)
+						await saver.adelete_thread(thread_id)
 					except:
 						pass
 
@@ -181,15 +180,16 @@ class TestAsyncIntegrationBinaryData:
 			channel_values={"binary": binary_data},
 		)
 
+		new_versions = {"binary": "1.0"}
+
 		test_passed = False
 		async with saver:
-
 			try:
 				# Store binary data
-				await saver.put(config, checkpoint, metadata, {})
+				await saver.aput(config, checkpoint, metadata, new_versions)
 
 				# Retrieve and verify
-				retrieved = await saver.get(config)
+				retrieved = await saver.aget(config)
 				assert retrieved is not None
 				assert retrieved["channel_values"]["binary"] == binary_data
 
@@ -197,7 +197,7 @@ class TestAsyncIntegrationBinaryData:
 
 			finally:
 				if test_passed:
-					await saver.delete_thread(thread_id)
+					await saver.adelete_thread(thread_id)
 
 	async def test_async_large_binary_payloads(self, http_base_url: str, http_api_key: str):
 		"""Test async handling of large binary payloads."""
@@ -225,15 +225,16 @@ class TestAsyncIntegrationBinaryData:
 			channel_values={"large_data": large_binary},
 		)
 
+		new_versions = {"large_data": "1.0"}
+
 		test_passed = False
 		async with saver:
-
 			try:
 				# Store large binary data
-				await saver.put(config, checkpoint, metadata, {})
+				await saver.aput(config, checkpoint, metadata, new_versions)
 
 				# Retrieve and verify integrity
-				retrieved = await saver.get(config)
+				retrieved = await saver.aget(config)
 				assert retrieved is not None
 
 				retrieved_data = retrieved["channel_values"]["large_data"]
@@ -244,7 +245,7 @@ class TestAsyncIntegrationBinaryData:
 
 			finally:
 				if test_passed:
-					await saver.delete_thread(thread_id)
+					await saver.adelete_thread(thread_id)
 
 
 @pytest.mark.asyncio
@@ -277,7 +278,6 @@ class TestAsyncIntegrationMetadataFiltering:
 		]
 
 		async with saver:
-
 			# Create all checkpoints
 			for case in test_cases:
 				config = {
@@ -297,25 +297,25 @@ class TestAsyncIntegrationMetadataFiltering:
 					"versions_seen": {},
 				}
 
-				await saver.put(config, checkpoint, case["metadata"], {})
+				await saver.aput(config, checkpoint, case["metadata"], {})
 
 			# Test simple filtering
 			base_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 
 			alice_checkpoints = []
-			async for cp in saver.list(base_config, filter={"user": "alice"}):
+			async for cp in saver.alist(base_config, filter={"user": "alice"}):
 				alice_checkpoints.append(cp)
 			assert len(alice_checkpoints) == 2
 
 			# Test nested filtering
 			nested_checkpoints = []
-			async for cp in saver.list(base_config, filter={"nested": {"level": "high"}}):
+			async for cp in saver.alist(base_config, filter={"nested": {"level": "high"}}):
 				nested_checkpoints.append(cp)
 			assert len(nested_checkpoints) == 1
 			assert nested_checkpoints[0].metadata["nested"]["level"] == "high"
 
 			# Cleanup
-			await saver.delete_thread(thread_id)
+			await saver.adelete_thread(thread_id)
 
 
 @pytest.mark.asyncio
@@ -331,7 +331,6 @@ class TestAsyncIntegrationErrorHandling:
 		)
 
 		async with saver:
-
 			# Try to get non-existent checkpoint
 			non_existent_config = {
 				"configurable": {
@@ -341,10 +340,10 @@ class TestAsyncIntegrationErrorHandling:
 				}
 			}
 
-			result = await saver.get(non_existent_config)
+			result = await saver.aget(non_existent_config)
 			assert result is None
 
-			tuple_result = await saver.get_tuple(non_existent_config)
+			tuple_result = await saver.aget_tuple(non_existent_config)
 			assert tuple_result is None
 
 	async def test_async_invalid_uuid_handling(self, http_base_url: str, http_api_key: str):
@@ -355,7 +354,6 @@ class TestAsyncIntegrationErrorHandling:
 		)
 
 		async with saver:
-
 			# Invalid UUID should cause validation error
 			invalid_config = {
 				"configurable": {
@@ -366,7 +364,7 @@ class TestAsyncIntegrationErrorHandling:
 
 			# This should raise an HTTPClientError due to validation
 			with pytest.raises(Exception):  # HTTPClientError or validation error
-				await saver.get(invalid_config)
+				await saver.aget(invalid_config)
 
 	async def test_async_operation_timeout_handling(self, http_base_url: str, http_api_key: str):
 		"""Test async handling of operation timeouts."""
@@ -398,7 +396,7 @@ class TestAsyncIntegrationErrorHandling:
 		async with saver:
 			try:
 				# This might timeout
-				await saver.put(config, checkpoint, metadata, {})
+				await saver.aput(config, checkpoint, metadata, {})
 			except (TimeoutException, asyncio.TimeoutError):
 				# Timeout is expected with such short timeout
 				pass
@@ -413,7 +411,7 @@ class TestAsyncIntegrationErrorHandling:
 		)
 		async with cleanup_saver:
 			try:
-				await cleanup_saver.delete_thread(thread_id)
+				await cleanup_saver.adelete_thread(thread_id)
 			except:
 				pass
 
@@ -431,7 +429,6 @@ class TestAsyncIntegrationErrorHandling:
 		test_passed = False
 		try:
 			async with saver:
-
 				# Create many checkpoints concurrently
 				num_checkpoints = 50
 				tasks = []
@@ -452,7 +449,7 @@ class TestAsyncIntegrationErrorHandling:
 					)
 
 					# Add to concurrent tasks
-					tasks.append(saver.put(config, checkpoint, metadata, {}))
+					tasks.append(saver.aput(config, checkpoint, metadata, {}))
 
 				# Execute all concurrently
 				results = await asyncio.gather(*tasks)
@@ -460,7 +457,7 @@ class TestAsyncIntegrationErrorHandling:
 
 				# List should handle large result sets
 				checkpoints = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}):
 					checkpoints.append(cp)
 
 				assert len(checkpoints) == num_checkpoints
@@ -475,7 +472,7 @@ class TestAsyncIntegrationErrorHandling:
 			if not test_passed:
 				async with saver:
 					try:
-						await saver.delete_thread(thread_id)
+						await saver.adelete_thread(thread_id)
 					except:
 						pass
 
@@ -501,7 +498,6 @@ class TestAsyncRealServerConcurrency:
 		test_passed = False
 		try:
 			async with saver:
-
 				# Create tasks for concurrent operations
 				tasks = []
 				for i in range(num_threads):
@@ -516,7 +512,7 @@ class TestAsyncRealServerConcurrency:
 						channel_values={"thread_index": i, "value": f"thread_{i}"},
 					)
 
-					tasks.append(saver.put(config, checkpoint, metadata, {}))
+					tasks.append(saver.aput(config, checkpoint, metadata, {}))
 
 				# Execute all concurrently
 				results = await asyncio.gather(*tasks)
@@ -531,7 +527,7 @@ class TestAsyncRealServerConcurrency:
 						checkpoint_id=checkpoint_ids[i],
 					)
 
-					retrieved = await saver.get(config)
+					retrieved = await saver.aget(config)
 					assert retrieved is not None
 					assert retrieved["channel_values"]["thread_index"] == i
 					assert retrieved["channel_values"]["value"] == f"thread_{i}"
@@ -542,7 +538,7 @@ class TestAsyncRealServerConcurrency:
 			if test_passed:
 				# Cleanup all threads
 				async with saver:
-					cleanup_tasks = [saver.delete_thread(tid) for tid in thread_ids]
+					cleanup_tasks = [saver.adelete_thread(tid) for tid in thread_ids]
 					await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
 	async def test_async_race_condition_handling(self, http_base_url: str, http_api_key: str):
@@ -564,7 +560,6 @@ class TestAsyncRealServerConcurrency:
 		test_passed = False
 		try:
 			async with saver:
-
 				# Create initial checkpoint
 				initial_checkpoint, initial_metadata = generate_checkpoint_with_marker(
 					checkpoint_id=checkpoint_id,
@@ -572,7 +567,7 @@ class TestAsyncRealServerConcurrency:
 					channel_values={"value": "initial"},
 				)
 
-				await saver.put(config, initial_checkpoint, initial_metadata, {})
+				await saver.aput(config, initial_checkpoint, initial_metadata, {})
 
 				# Create concurrent update tasks
 				update_count = 10
@@ -582,7 +577,7 @@ class TestAsyncRealServerConcurrency:
 					updated_checkpoint = initial_checkpoint.copy()
 					updated_checkpoint["channel_values"] = {"value": f"update_{i}"}
 
-					update_tasks.append(saver.put(config, updated_checkpoint, initial_metadata, {}))
+					update_tasks.append(saver.aput(config, updated_checkpoint, initial_metadata, {}))
 
 				# Execute all updates concurrently
 				results = await asyncio.gather(*update_tasks, return_exceptions=True)
@@ -592,7 +587,7 @@ class TestAsyncRealServerConcurrency:
 				assert len(successful_updates) > 0
 
 				# Verify final state is from one of the updates
-				final_checkpoint = await saver.get(config)
+				final_checkpoint = await saver.aget(config)
 				assert final_checkpoint is not None
 
 				final_value = final_checkpoint["channel_values"]["value"]
@@ -603,7 +598,7 @@ class TestAsyncRealServerConcurrency:
 		finally:
 			if test_passed:
 				async with saver:
-					await saver.delete_thread(thread_id)
+					await saver.adelete_thread(thread_id)
 
 
 @pytest.mark.asyncio
@@ -648,20 +643,19 @@ class TestAsyncRealServerDataIntegrity:
 		test_passed = False
 		try:
 			async with saver:
-
 				# Create first checkpoint
-				await saver.put(config_1, checkpoint_1, metadata_1, {})
+				await saver.aput(config_1, checkpoint_1, metadata_1, {})
 
 				# Create second checkpoint with same thread but different ID
-				await saver.put(config_2, checkpoint_2, metadata_2, {})
+				await saver.aput(config_2, checkpoint_2, metadata_2, {})
 
 				# First checkpoint should remain unchanged
-				retrieved_1 = await saver.get(config_1)
+				retrieved_1 = await saver.aget(config_1)
 				assert retrieved_1 is not None
 				assert retrieved_1["channel_values"]["value"] == "original"
 
 				# Second checkpoint should have new value
-				retrieved_2 = await saver.get(config_2)
+				retrieved_2 = await saver.aget(config_2)
 				assert retrieved_2 is not None
 				assert retrieved_2["channel_values"]["value"] == "updated"
 
@@ -671,7 +665,7 @@ class TestAsyncRealServerDataIntegrity:
 			if not test_passed:
 				async with saver:
 					try:
-						await saver.delete_thread(thread_id)
+						await saver.adelete_thread(thread_id)
 					except:
 						pass
 
@@ -693,7 +687,6 @@ class TestAsyncRealServerDataIntegrity:
 		test_passed = False
 		try:
 			async with saver:
-
 				# Create checkpoints for thread 1
 				for i in range(3):
 					checkpoint_id = generate_unique_checkpoint_id()
@@ -711,7 +704,7 @@ class TestAsyncRealServerDataIntegrity:
 						metadata={"thread_group": "group1"},
 					)
 
-					await saver.put(config, checkpoint, metadata, {})
+					await saver.aput(config, checkpoint, metadata, {})
 
 				# Create checkpoints for thread 2
 				for i in range(3):
@@ -730,11 +723,11 @@ class TestAsyncRealServerDataIntegrity:
 						metadata={"thread_group": "group2"},
 					)
 
-					await saver.put(config, checkpoint, metadata, {})
+					await saver.aput(config, checkpoint, metadata, {})
 
 				# Verify thread 1 checkpoints are isolated
 				thread_1_list = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id_1, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id_1, "checkpoint_ns": ""}}):
 					thread_1_list.append(cp)
 
 				assert len(thread_1_list) == 3
@@ -743,7 +736,7 @@ class TestAsyncRealServerDataIntegrity:
 
 				# Verify thread 2 checkpoints are isolated
 				thread_2_list = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id_2, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id_2, "checkpoint_ns": ""}}):
 					thread_2_list.append(cp)
 
 				assert len(thread_2_list) == 3
@@ -754,18 +747,18 @@ class TestAsyncRealServerDataIntegrity:
 				assert thread_1_ids.isdisjoint(thread_2_ids)
 
 				# Delete thread 1
-				await saver.delete_thread(thread_id_1)
+				await saver.adelete_thread(thread_id_1)
 
 				# Thread 2 should be unaffected
 				thread_2_list_after = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id_2, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id_2, "checkpoint_ns": ""}}):
 					thread_2_list_after.append(cp)
 
 				assert len(thread_2_list_after) == 3
 
 				# Thread 1 should be gone
 				thread_1_list_after = []
-				async for cp in saver.list({"configurable": {"thread_id": thread_id_1, "checkpoint_ns": ""}}):
+				async for cp in saver.alist({"configurable": {"thread_id": thread_id_1, "checkpoint_ns": ""}}):
 					thread_1_list_after.append(cp)
 
 				assert len(thread_1_list_after) == 0
@@ -776,7 +769,7 @@ class TestAsyncRealServerDataIntegrity:
 			if not test_passed:
 				async with saver:
 					try:
-						await saver.delete_thread(thread_id_1)
-						await saver.delete_thread(thread_id_2)
+						await saver.adelete_thread(thread_id_1)
+						await saver.adelete_thread(thread_id_2)
 					except:
 						pass

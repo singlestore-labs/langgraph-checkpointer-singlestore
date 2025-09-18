@@ -286,10 +286,23 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		self.max_connections = max_connections
 		self.max_keepalive_connections = max_keepalive_connections
 		self.lock = asyncio.Lock()
-		self.loop = asyncio.get_running_loop()
+		self._loop: asyncio.AbstractEventLoop | None = None
 		self._client: AsyncHTTPClient | None = None
 		self._client_context = None
-		self._http_client = None
+
+	@property
+	def loop(self) -> asyncio.AbstractEventLoop:
+		"""Get the event loop lazily."""
+		if self._loop is None:
+			try:
+				self._loop = asyncio.get_running_loop()
+			except RuntimeError:
+				# No running loop, get the event loop
+				self._loop = asyncio.get_event_loop()
+				if self._loop is None:
+					self._loop = asyncio.new_event_loop()
+					asyncio.set_event_loop(self._loop)
+		return self._loop
 
 	async def open(self) -> AsyncHTTPSingleStoreSaver:
 		"""Open the async HTTP client connection.
@@ -312,8 +325,7 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 			)
 			# Create the actual httpx async client
 			self._client_context = client.create()
-			self._http_client = await self._client_context.__aenter__()
-			self._client = self._http_client
+			self._client = await self._client_context.__aenter__()
 		return self
 
 	async def close(self) -> None:
@@ -329,7 +341,6 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 					pass  # Ignore cleanup errors
 			self._client = None
 			self._client_context = None
-			self._http_client = None
 
 	async def __aenter__(self) -> AsyncHTTPSingleStoreSaver:
 		"""Enter async context manager."""

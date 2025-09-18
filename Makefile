@@ -29,7 +29,7 @@ tests:
 test-http-live: ## Run HTTP tests with specific server URL
 	@echo "Usage: make test-http-live SERVER_URL=http://localhost:8080 BASE_PATH=/api/v1 API_KEY=your-key"
 	@if [ -z "$(SERVER_URL)" ]; then echo "ERROR: SERVER_URL is required"; exit 1; fi
-	uv run pytest tests/test_real_server.py \
+	uv run pytest tests/test_real_server.py tests/test_real_server_async.py \
 		--use-real-server \
 		--server-url="$(SERVER_URL)" \
 		$(if $(BASE_PATH),--base-path="$(BASE_PATH)") \
