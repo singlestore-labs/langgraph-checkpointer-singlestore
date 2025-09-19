@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -120,10 +120,8 @@ class HTTPSingleStoreSaver(BaseSingleStoreSaver):
 		"""
 		if self._client is not None:
 			if hasattr(self, "_client_context") and self._client_context:
-				try:
+				with suppress(Exception):
 					self._client_context.__exit__(None, None, None)
-				except Exception:
-					pass  # Ignore cleanup errors
 			self._client = None
 			self._client_context = None
 			self._http_client = None

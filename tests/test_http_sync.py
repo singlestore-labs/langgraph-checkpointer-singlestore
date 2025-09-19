@@ -650,7 +650,7 @@ class TestSearchFunctionality:
 		"""Test search functionality with various filter combinations."""
 		import json
 		from langgraph.checkpoint.singlestore.http.utils import prepare_metadata_filter
-		
+
 		test_queries = create_search_test_queries()
 		all_checkpoints = create_test_checkpoints()
 
@@ -908,10 +908,10 @@ class TestEdgeCases:
 		"""Test list with all optional parameters."""
 		import json
 		from langgraph.checkpoint.singlestore.http.utils import prepare_metadata_filter
-		
+
 		filter_dict = {"source": "test", "step": 5}
 		prepared_filter = prepare_metadata_filter(filter_dict)
-		
+
 		expected_params = {
 			"thread_id": TEST_THREAD_ID,
 			"checkpoint_ns": "namespace",

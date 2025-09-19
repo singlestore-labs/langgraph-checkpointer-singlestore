@@ -7,7 +7,7 @@ import json
 import logging
 import pprint
 from collections.abc import AsyncIterator, Iterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from functools import wraps
 from typing import Any
 
@@ -335,10 +335,8 @@ class AsyncHTTPSingleStoreSaver(BaseSingleStoreSaver):
 		"""
 		if self._client is not None:
 			if hasattr(self, "_client_context") and self._client_context:
-				try:
+				with suppress(Exception):
 					await self._client_context.__aexit__(None, None, None)
-				except Exception:
-					pass  # Ignore cleanup errors
 			self._client = None
 			self._client_context = None
 

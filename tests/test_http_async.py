@@ -118,7 +118,11 @@ class TestAsyncHTTPCheckpoint:
 		# Verify the request was made with correct headers (only in mock mode)
 		if httpx_mock:
 			request = httpx_mock.get_request()
-			assert request.headers["Authorization"] == f"Bearer {http_api_key}" if http_api_key else "Authorization" not in request.headers
+			assert (
+				request.headers["Authorization"] == f"Bearer {http_api_key}"
+				if http_api_key
+				else "Authorization" not in request.headers
+			)
 			assert request.headers["Content-Type"] == "application/json"
 
 	@pytest.mark.asyncio
@@ -706,7 +710,7 @@ class TestSearchFunctionality:
 		"""Test search functionality with various filter combinations."""
 		import json
 		from langgraph.checkpoint.singlestore.http.utils import prepare_metadata_filter
-		
+
 		test_queries = create_search_test_queries()
 		all_checkpoints = create_test_checkpoints()
 
@@ -813,7 +817,7 @@ class TestConcurrentAccess:
 			)
 
 		async_saver = AsyncHTTPSingleStoreSaver(base_url=http_base_url, api_key=http_api_key)
-		
+
 		async def write_checkpoint(thread_id: str, checkpoint_id: int):
 			config = {
 				"configurable": {
@@ -825,6 +829,7 @@ class TestConcurrentAccess:
 			metadata = {"source": "concurrent", "id": checkpoint_id}
 
 			await async_saver.aput(config, checkpoint, metadata, {})
+
 		tasks = [write_checkpoint(concurrent_thread_ids[i], i) for i in range(num_threads)]
 
 		await asyncio.gather(*tasks)
@@ -885,7 +890,7 @@ class TestConcurrentAccess:
 			)
 
 		async_saver = AsyncHTTPSingleStoreSaver(base_url=http_base_url, api_key=http_api_key)
-		
+
 		async def write_operation(thread_id: str, checkpoint_id: int):
 			config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
 			checkpoint = create_checkpoint(empty_checkpoint(), {}, checkpoint_id)
@@ -1169,7 +1174,9 @@ class _TestAsyncAdvancedErrorHandling_DISABLED:
 		"""Test list with malformed error response."""
 		httpx_mock.add_response(
 			method="GET",
-			url=httpx.URL("http://localhost:8080/checkpoints", params={"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}),
+			url=httpx.URL(
+				"http://localhost:8080/checkpoints", params={"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}
+			),
 			status_code=400,
 			text="Bad Request",
 		)
@@ -1330,7 +1337,9 @@ class _TestAsyncBridges_DISABLED:
 		"""Test sync list bridge from different thread."""
 		httpx_mock.add_response(
 			method="GET",
-			url=httpx.URL("http://localhost:8080/checkpoints", params={"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}),
+			url=httpx.URL(
+				"http://localhost:8080/checkpoints", params={"thread_id": TEST_THREAD_ID, "checkpoint_ns": ""}
+			),
 			json={"checkpoints": []},
 		)
 
