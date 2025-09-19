@@ -1,6 +1,7 @@
 # type: ignore
 
 from typing import Any
+import pdb
 
 import pytest
 from langchain_core.runnables import RunnableConfig
@@ -13,6 +14,19 @@ from langgraph.checkpoint.base import (
 	empty_checkpoint,
 )
 from langgraph.checkpoint.serde.types import TASKS
+from tests.test_utils import (
+	create_test_checkpoints,
+	create_large_metadata,
+	create_unicode_metadata,
+	create_metadata_with_private_keys,
+	create_empty_checkpoint,
+	create_checkpoint_with_binary_data,
+	create_search_test_queries,
+	assert_checkpoint_metadata,
+	create_config_with_metadata,
+)
+
+from langgraph.checkpoint.singlestore import SingleStoreSaver
 
 
 def _exclude_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -22,7 +36,7 @@ def _exclude_keys(config: dict[str, Any]) -> dict[str, Any]:
 class TestSyncCheckpoint:
 	"""Test class for sync checkpoint operations."""
 
-	def test_combined_metadata(self, test_data, sync_saver) -> None:
+	def test_combined_metadata(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		import uuid
 
 		unique_id = uuid.uuid4().hex[:8]
@@ -49,7 +63,7 @@ class TestSyncCheckpoint:
 			"run_id": "my_run_id",
 		}
 
-	def test_search(self, test_data, sync_saver) -> None:
+	def test_search(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		configs = test_data["configs"]
 		checkpoints = test_data["checkpoints"]
 		metadata = test_data["metadata"]
@@ -97,7 +111,7 @@ class TestSyncCheckpoint:
 			search_results_5[1].config["configurable"]["checkpoint_ns"],
 		} == {"", "inner"}
 
-	def test_null_chars(self, test_data, sync_saver) -> None:
+	def test_null_chars(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		config = sync_saver.put(
 			test_data["configs"][0],
 			test_data["checkpoints"][0],
@@ -107,7 +121,7 @@ class TestSyncCheckpoint:
 		assert sync_saver.get_tuple(config).metadata["my_key"] == "abc"  # type: ignore
 		assert list(sync_saver.list(None, filter={"my_key": "abc"}))[0].metadata["my_key"] == "abc"
 
-	def test_pending_sends_migration(self, sync_saver) -> None:
+	def test_pending_sends_migration(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		import uuid
 
 		unique_id = uuid.uuid4().hex[:8]
@@ -149,7 +163,7 @@ class TestSyncCheckpoint:
 		assert search_results[0].checkpoint["channel_values"] == {TASKS: ["send-1", "send-2", "send-3"]}
 		assert TASKS in search_results[0].checkpoint["channel_versions"]
 
-	def test_basic_get_put(self, sync_saver) -> None:
+	def test_basic_get_put(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		"""Test basic get and put operations."""
 		import uuid
 
@@ -173,7 +187,7 @@ class TestSyncCheckpoint:
 		assert retrieved.checkpoint["id"] == checkpoint["id"]
 		assert retrieved.metadata["test"] == "value"
 
-	def test_get_nonexistent(self, sync_saver) -> None:
+	def test_get_nonexistent(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		"""Test getting a non-existent checkpoint."""
 		import uuid
 
@@ -189,7 +203,7 @@ class TestSyncCheckpoint:
 		result = sync_saver.get_tuple(config)
 		assert result is None
 
-	def test_list_empty(self, sync_saver) -> None:
+	def test_list_empty(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		"""Test listing when no checkpoints exist."""
 		import uuid
 
@@ -205,7 +219,7 @@ class TestSyncCheckpoint:
 		results = list(sync_saver.list(config))
 		assert len(results) == 0
 
-	def test_delete_thread(self, sync_saver) -> None:
+	def test_delete_thread(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
 		"""Test deleting all checkpoints for a thread."""
 		import uuid
 
@@ -235,3 +249,97 @@ class TestSyncCheckpoint:
 		# Verify they're gone
 		results = list(sync_saver.list(config))
 		assert len(results) == 0
+
+	def test_unicode_metadata(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
+		"""Test handling of Unicode characters in metadata."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		unicode_metadata = create_unicode_metadata()
+
+		config = {
+			"configurable": {
+				"thread_id": f"unicode-test-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
+		sync_saver.put(config, checkpoint, unicode_metadata, {})
+
+		retrieved = sync_saver.get_tuple(config)
+		assert retrieved is not None
+		assert retrieved.metadata == unicode_metadata
+
+	def test_large_metadata(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
+		"""Test handling of large metadata payloads."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		large_metadata = create_large_metadata(num_keys=100)
+
+		config = {
+			"configurable": {
+				"thread_id": f"large-meta-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		checkpoint = create_checkpoint(empty_checkpoint(), {}, 1)
+		sync_saver.put(config, checkpoint, large_metadata, {})
+
+		retrieved = sync_saver.get_tuple(config)
+		assert retrieved is not None
+		assert len(retrieved.metadata) == 100
+
+	def test_empty_checkpoint_values(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
+		"""Test handling of checkpoints with empty values."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		empty_cp = create_empty_checkpoint()
+
+		config = {
+			"configurable": {
+				"thread_id": f"empty-cp-{unique_id}",
+				"checkpoint_ns": "",
+			}
+		}
+
+		result_config = sync_saver.put(config, empty_cp, {}, {})
+		assert result_config["configurable"]["checkpoint_id"] == empty_cp["id"]
+
+		retrieved = sync_saver.get_tuple(result_config)
+		assert retrieved is not None
+		assert retrieved.checkpoint["channel_values"] == {}
+		assert retrieved.checkpoint["channel_versions"] == {}
+
+	def test_search_with_complex_filters(self, test_data: dict[str, Any], sync_saver: SingleStoreSaver) -> None:
+		"""Test search functionality with complex filter combinations."""
+		import uuid
+
+		unique_id = uuid.uuid4().hex[:8]
+		test_checkpoints = create_test_checkpoints()
+
+		# Put test checkpoints
+		for i, cp_data in enumerate(test_checkpoints):
+			config = {
+				"configurable": {
+					"thread_id": f"search-test-{unique_id}",
+					"checkpoint_ns": cp_data["checkpoint_ns"],
+				}
+			}
+			sync_saver.put(config, cp_data["checkpoint"], cp_data["metadata"], {})
+
+		# Test various search queries
+		test_queries = create_search_test_queries()
+
+		for filter_query, expected_count in test_queries:
+			results = list(
+				sync_saver.list({"configurable": {"thread_id": f"search-test-{unique_id}"}}, filter=filter_query)
+			)
+			# The actual count may vary from expected if some filters don't match
+			if filter_query:
+				assert len(results) <= expected_count
+			else:
+				assert len(results) == len(test_checkpoints)

@@ -25,6 +25,7 @@ select = [
 
 ignore = [
     "W191",   # tab-indentation
+    "E101",   # indentation contains mixed spaces and tabs
     "E111",   # indentation-with-invalid-multiple
     "E114",   # indentation-with-invalid-multiple-comment
     "E117",   # over-indented
