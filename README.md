@@ -2,6 +2,9 @@
 
 Implementation of LangGraph CheckpointSaver that uses SingleStore.
 
+> [!NOTE]
+> This package requires SingleStore version 8.9.5 or later, as it uses the `JSON_BUILD_ARRAY` function that was introduced in that [version](https://docs.singlestore.com/db/v9.0/release-notes/singlestore-memsql/8-9-release-notes/maintenance-release-changelog-v-8-9/#2025-01-27-version-8-9-45). Please ensure your SingleStore instance is upgraded accordingly.
+
 ## Dependencies
 
 By default `langgraph-checkpoint-singlestore` installs `singlestoredb` package. You can install it with:
